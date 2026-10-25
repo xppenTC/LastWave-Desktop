@@ -4,13 +4,18 @@ Windows x64, nothing to install: unzip anywhere and run `lastwave_desktop.exe`.
 Close any other LastWave window first: the app runs as a single instance.
 No `.env` in these builds: the lossless addons are disabled (YouTube playback is unaffected).
 
-## `lastwave_1.5.0-backup_windows-x86_64-portable.zip` (latest)
+## `lastwave_1.5.0-sync_windows-x86_64-portable.zip` (latest)
 
-Built from `feat/backup-file` (db751af) = upstream main bc87414 (CSV import already merged) +
-Settings → General → **Backup & Restore**: export / restore the same backup file as the LastWave phone app.
+Built from `feat/backup-file` (3570022) = upstream main bc87414 (CSV import already merged) +
+Settings → General → **Backup & Restore**:
+- **Export backup**: writes the same backup file as the LastWave phone app.
+- **Sync with file**: three-way merge with that shared file, written back for the phone
+  (phone side: Backup & Restore → Sync with file, from the `feat/backup-sync` APK).
+  The phone's local songs and its "Local songs" playlist are never imported here.
+
 KHInsider is **not** in this build.
 
-SHA-256: B0958E6509A04D040C6E709C52AA98C3CDACE70CBB09DD739682F731DA2C7674
+SHA-256: DDC6D0D0851CDE445A10F75EA101F518AB85B84DB5C1CACB96992E7EE69C7749
 
 ## `lastwave_1.5.0-csv-khinsider_windows-x86_64-portable.zip`
 
