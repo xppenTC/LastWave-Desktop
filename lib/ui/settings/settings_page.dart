@@ -2712,16 +2712,22 @@ class _General extends ConsumerWidget {
           title: 'Backup & Restore',
           subtitle: 'Playlists and "don\'t recommend" list, synced through '
               'one file shared with the LastWave phone app',
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              WaveFilledButton(
-                onPressed: () => exportBackup(context, ref),
-                child: const Text('Export backup'),
-              ),
-              const SizedBox(width: 8),
-              WaveButton(
-                onPressed: () => syncWithFile(context, ref),
-                child: const Text('Sync with file'),
+              const DriveSyncPanel(),
+              Row(
+                children: [
+                  WaveButton(
+                    onPressed: () => exportBackup(context, ref),
+                    child: const Text('Export backup'),
+                  ),
+                  const SizedBox(width: 8),
+                  WaveButton(
+                    onPressed: () => syncWithFile(context, ref),
+                    child: const Text('Sync with file'),
+                  ),
+                ],
               ),
             ],
           ),

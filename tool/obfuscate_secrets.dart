@@ -23,6 +23,9 @@ const _keys = [
   'ADDON_CLIENT_SECRET',
 
   'LYRICS_API_KEY',
+
+  'GOOGLE_CLIENT_ID',
+  'GOOGLE_CLIENT_SECRET',
 ];
 
 String _constName(String key) {

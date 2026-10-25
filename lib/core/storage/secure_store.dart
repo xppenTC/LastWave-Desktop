@@ -57,6 +57,10 @@ class SecureStore {
   Future<String?> readYtActive() => _read(_ytActive);
   Future<void> writeYtActive(String? v) => _write(_ytActive, v);
 
+  /// Other features' credentials (e.g. the Google Drive refresh token).
+  Future<String?> readSecret(String key) => _read(key);
+  Future<void> writeSecret(String key, String? value) => _write(key, value);
+
   Future<void> clearAll() async {
     _memoryFallback.clear();
     try {

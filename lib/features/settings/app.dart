@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../app/router.dart';
 import '../../app/window.dart';
 import '../../app/window_lifecycle.dart';
+import '../backup/drive_sync.dart';
 import '../../app/auth_gate.dart';
 import '../../core/storage/prefs.dart';
 import '../../design_system/fluent/lw_scrollbar.dart';
@@ -77,6 +78,8 @@ class _LastWaveAppState extends ConsumerState<LastWaveApp> {
         // hardware media keys. No-op elsewhere.
         ref.read(smtcProvider).startup();
       } catch (_) {}
+      // Google Drive sync: no-op until an account is linked.
+      ref.read(driveSyncProvider.notifier).startup();
       Future<void>.delayed(const Duration(seconds: 20), () {
         try {
           if (ref.read(prefsProvider).disablePoToken) return;

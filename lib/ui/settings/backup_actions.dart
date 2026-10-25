@@ -7,9 +7,70 @@ import 'package:fluent_ui/fluent_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../features/backup/backup_file.dart';
+import '../../features/backup/drive_sync.dart';
 import '../../features/library/playlists.dart';
 import '../../features/search/shared_providers.dart';
 import '../components/buttons.dart';
+import '../theme/tokens.dart';
+
+/// Google Drive auto-sync: connect, sync now, status. Hidden in builds
+/// without a Google client id.
+class DriveSyncPanel extends ConsumerWidget {
+  const DriveSyncPanel({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = ref.watch(driveSyncProvider);
+    if (!s.available) return const SizedBox.shrink();
+    final sync = ref.read(driveSyncProvider.notifier);
+    final last = s.lastSync;
+    final status = s.syncing
+        ? 'Syncing…'
+        : s.error ??
+              (!s.connected
+                  ? 'Keeps the phone app and this computer in step, through a '
+                        'hidden file in your own Google Drive.'
+                  : last == null
+                  ? 'Connected'
+                  : 'Last sync ${last.hour.toString().padLeft(2, '0')}:'
+                        '${last.minute.toString().padLeft(2, '0')}');
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              if (!s.connected)
+                WaveFilledButton(
+                  onPressed: sync.connect,
+                  child: const Text('Connect Google Drive'),
+                )
+              else ...[
+                WaveFilledButton(
+                  onPressed: s.syncing ? null : sync.syncNow,
+                  child: const Text('Sync now'),
+                ),
+                const SizedBox(width: 8),
+                WaveButton(
+                  onPressed: sync.disconnect,
+                  child: const Text('Disconnect'),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            status,
+            style: WaveType.meta.copyWith(
+              color: s.error != null ? Colors.red : waveTextSecondary(context),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 /// Saves the library as a LastWave-Native backup file.
 Future<void> exportBackup(BuildContext context, WidgetRef ref) async {
