@@ -42,6 +42,7 @@ import '../../features/presence/discord_presence_service.dart';
 import '../../features/telemetry/live_telemetry_service.dart';
 import '../../features/updates/update_service.dart';
 import '../updates/update_dialog.dart';
+import 'backup_actions.dart';
 import 'diagnostics_actions.dart';
 
 const _waveSettingsSections = [
@@ -2702,6 +2703,31 @@ class _General extends ConsumerWidget {
                 title: 'Close button minimize to tray.',
                 subtitle:
                     'Keep the player running in the background when closed.',
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _Group(
+          title: 'Backup & Restore',
+          subtitle: 'Playlists and "don\'t recommend" list, synced through '
+              'one file shared with the LastWave phone app',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const DriveSyncPanel(),
+              Row(
+                children: [
+                  WaveButton(
+                    onPressed: () => exportBackup(context, ref),
+                    child: const Text('Export backup'),
+                  ),
+                  const SizedBox(width: 8),
+                  WaveButton(
+                    onPressed: () => syncWithFile(context, ref),
+                    child: const Text('Sync with file'),
+                  ),
+                ],
               ),
             ],
           ),

@@ -28,6 +28,10 @@ class StoredTrack {
   /// Direct source the player opens instead of a YouTube match, e.g. a
   /// `khinsider://` track page. Empty for YouTube tracks.
   final String playbackUrl;
+  /// Non-YouTube link from a LastWave-Native backup (local file path,
+  /// Last.fm page…). Unused for playback here; kept so exporting the
+  /// backup back to the phone returns it unchanged.
+  final String url;
 
   const StoredTrack({
     required this.name,
@@ -37,6 +41,7 @@ class StoredTrack {
     this.album = '',
     this.durationSeconds = 0,
     this.playbackUrl = '',
+    this.url = '',
   });
 
   Map<String, dynamic> toJson() => {
@@ -47,6 +52,7 @@ class StoredTrack {
         'album': album,
         'durationSeconds': durationSeconds,
         if (playbackUrl.isNotEmpty) 'playbackUrl': playbackUrl,
+        if (url.isNotEmpty) 'url': url,
       };
 
   factory StoredTrack.fromJson(Map<String, dynamic> json) =>
@@ -61,6 +67,7 @@ class StoredTrack {
         durationSeconds:
             int.tryParse('${json['durationSeconds'] ?? 0}') ?? 0,
         playbackUrl: json['playbackUrl']?.toString() ?? '',
+        url: json['url']?.toString() ?? '',
       );
 
   PlayableTrack toPlayable() => PlayableTrack(

@@ -47,10 +47,14 @@ jobs:
       # (gitignored), so the repo secret ADDON_CLIENT_SECRET is written
       # to .env here. GitHub masks the value in logs; when unset the
       # key stays empty and addon calls fail closed server-side.
-      # (Last.fm is BYOK and LYRICS_API_KEY is unused — nothing else
-      # needs injecting.)
+      # GOOGLE_CLIENT_ID/SECRET enable Google Drive sync; when unset the
+      # Drive panel is hidden. (Last.fm is BYOK and LYRICS_API_KEY is
+      # unused.)
       - name: Write .env from secrets
-        run: echo "ADDON_CLIENT_SECRET=${{ secrets.ADDON_CLIENT_SECRET }}" > .env
+        run: |
+          echo "ADDON_CLIENT_SECRET=${{ secrets.ADDON_CLIENT_SECRET }}" > .env
+          echo "GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}" >> .env
+          echo "GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}" >> .env
 
       - name: Generate Obfuscated Secrets
         run: dart tool/obfuscate_secrets.dart
@@ -321,7 +325,10 @@ jobs:
           cache: true
 
       - name: Write .env from secrets
-        run: echo "ADDON_CLIENT_SECRET=${{ secrets.ADDON_CLIENT_SECRET }}" > .env
+        run: |
+          echo "ADDON_CLIENT_SECRET=${{ secrets.ADDON_CLIENT_SECRET }}" > .env
+          echo "GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}" >> .env
+          echo "GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}" >> .env
 
       - name: Generate Obfuscated Secrets
         run: dart tool/obfuscate_secrets.dart
@@ -461,7 +468,10 @@ jobs:
           cache: true
 
       - name: Write .env from secrets
-        run: echo "ADDON_CLIENT_SECRET=${{ secrets.ADDON_CLIENT_SECRET }}" > .env
+        run: |
+          echo "ADDON_CLIENT_SECRET=${{ secrets.ADDON_CLIENT_SECRET }}" > .env
+          echo "GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}" >> .env
+          echo "GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}" >> .env
 
       - name: Generate Obfuscated Secrets
         run: dart tool/obfuscate_secrets.dart

@@ -41,6 +41,13 @@ class AppEnv {
   /// proof. Empty = addon calls fail closed server-side (404).
   static String get addonClientSecret => _decode(secrets.kAddonClientSecret);
 
+  /// Google OAuth "Desktop app" client for Drive sync (`drive.appdata`).
+  /// Google treats an installed app's secret as non-confidential, but it
+  /// stays out of git like the rest. Empty = Drive sync hidden.
+  static String get googleClientId => _decode(secrets.kGoogleClientId);
+  static String get googleClientSecret =>
+      _decode(secrets.kGoogleClientSecret);
+
   /// About-screen catalog list. Never includes URLs or keys.
   /// (Settings → Sources) are the only lossless catalog now.
   static String get losslessCatalogLabel => 'Addons';
