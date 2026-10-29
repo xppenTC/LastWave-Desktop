@@ -770,9 +770,14 @@ class AddonApi implements LosslessSource {
         s.split(' ').where((t) => t.isNotEmpty && !stop.contains(t)).toSet();
     final ta = toks(a);
     final tb = toks(b);
+    // A one-letter word is an initial: YouTube bills "Unicorn on K" where
+    // the catalog has "Unicorn On Ketamine" (the phone's matcher drops it).
+    bool covers(Set<String> big, Set<String> small) => small.every((s) =>
+        big.contains(s) ||
+        (s.length == 1 && big.any((w) => w.startsWith(s))));
     return ta.isNotEmpty &&
         tb.isNotEmpty &&
-        (tb.containsAll(ta) || ta.containsAll(tb));
+        (covers(tb, ta) || covers(ta, tb));
   }
 
   // -- stream URL ------------------------------------------------------------------

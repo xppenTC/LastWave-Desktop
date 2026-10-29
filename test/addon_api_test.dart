@@ -379,6 +379,24 @@ void main() {
           isNull);
     });
 
+    test('a one-letter initial matches the full artist name', () {
+      // YouTube bills "Unicorn on K"; the catalog has the full name.
+      final m = AddonApi.bestMatch(
+        [t('1', 'BAILANDO', 'Unicorn On Ketamine, Opgekonkerd')],
+        title: 'Bailando',
+        artist: 'Unicorn on K',
+      );
+      expect(m?.id, '1');
+      // An initial still has to agree: "Jay Z" is not "Jay Rock".
+      expect(
+          AddonApi.bestMatch(
+            [t('1', 'Money Trees', 'Jay Rock')],
+            title: 'Money Trees',
+            artist: 'Jay Z',
+          ),
+          isNull);
+    });
+
     test('duration gate rejects far lengths', () {
       expect(
           AddonApi.bestMatch(
