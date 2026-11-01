@@ -10,7 +10,8 @@ import 'dart:convert';
 /// - playlists match by id, except Liked Songs which match by mode;
 /// - tracks match by "name|artist" (lowercased), exclusions by trackKey;
 /// - an edit beats a delete; without a base everything is kept (union);
-/// - track order follows the file, local additions go at the end.
+/// - track order follows the file, local additions go at the end - except
+///   ones above every shared track, which stay first (a like in Liked Songs).
 ///
 /// [holds] tells which tracks the local device can keep: one it cannot
 /// (the phone's local songs, on the desktop) is never read as deleted;
@@ -123,9 +124,20 @@ Map<String, dynamic> _mergePlaylist(
       if (!removed.contains(trackKey(t))) t,
   ];
   final present = result.map(trackKey).toSet();
+  var front = 0;
+  var belowShared = false;
   for (final t in localTracks) {
     final k = trackKey(t);
-    if (!baseKeys.contains(k) && present.add(k)) result.add(t);
+    if (!baseKeys.contains(k) && present.add(k)) {
+      // First sync (no base): plain union, file order then ours.
+      if (belowShared || base == null) {
+        result.add(t);
+      } else {
+        result.insert(front++, t);
+      }
+    } else if (present.contains(k)) {
+      belowShared = true;
+    }
   }
   merged['tracksJson'] = jsonEncode(result);
   return merged;
