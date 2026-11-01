@@ -10,8 +10,9 @@ import 'dart:convert';
 /// - playlists match by id, except Liked Songs which match by mode;
 /// - tracks match by "name|artist" (lowercased), exclusions by trackKey;
 /// - an edit beats a delete; without a base everything is kept (union);
-/// - track order follows the file, local additions go at the end - except
-///   ones above every shared track, which stay first (a like in Liked Songs).
+/// - track order is ours when the file kept the base's order (a song moved
+///   or re-liked here stays where we put it); otherwise it follows the file,
+///   local additions at the end except ones above every shared track.
 ///
 /// [holds] tells which tracks the local device can keep: one it cannot
 /// (the phone's local songs, on the desktop) is never read as deleted;
@@ -139,8 +140,53 @@ Map<String, dynamic> _mergePlaylist(
       belowShared = true;
     }
   }
-  merged['tracksJson'] = jsonEncode(result);
+  merged['tracksJson'] = jsonEncode(
+    base != null && !_reordered(baseTracks, remoteTracks)
+        ? _inLocalOrder(result, localTracks, remoteTracks)
+        : result,
+  );
   return merged;
+}
+
+/// True when [theirs] holds the tracks it shares with [base] in another order.
+bool _reordered(
+  List<Map<String, dynamic>> base,
+  List<Map<String, dynamic>> theirs,
+) {
+  final baseKeys = base.map(trackKey).toList();
+  final theirKeys = theirs.map(trackKey).toList();
+  final shared = baseKeys.toSet().intersection(theirKeys.toSet());
+  final a = baseKeys.where(shared.contains).toList();
+  final b = theirKeys.where(shared.contains).toList();
+  if (a.length != b.length) return true;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return true;
+  }
+  return false;
+}
+
+/// [merged] in [local]'s order; a track only the file has follows the one
+/// before it there.
+List<Map<String, dynamic>> _inLocalOrder(
+  List<Map<String, dynamic>> merged,
+  List<Map<String, dynamic>> local,
+  List<Map<String, dynamic>> remote,
+) {
+  final byKey = {for (final t in merged) trackKey(t): t};
+  final outKeys = <String>[];
+  for (final k in local.map(trackKey)) {
+    if (byKey.containsKey(k) && !outKeys.contains(k)) outKeys.add(k);
+  }
+  var after = -1;
+  for (final k in remote.map(trackKey)) {
+    final at = outKeys.indexOf(k);
+    if (at >= 0) {
+      after = at;
+    } else if (byKey.containsKey(k)) {
+      outKeys.insert(++after, k);
+    }
+  }
+  return [for (final k in outKeys) byKey[k]!];
 }
 
 List<String> _visibleKeys(
