@@ -65,6 +65,21 @@ void main() {
     expect(names(m.playlists.first), ['a', 'b', 'c']);
   });
 
+  test('tracks added above every shared one stay first', () {
+    final m = merge(
+      base: [
+        pl(1, [t('a'), t('b')], mode: 'liked'),
+      ],
+      local: [
+        pl(1, [t('n2'), t('n1'), t('a'), t('b'), t('c')], mode: 'liked'),
+      ],
+      remote: [
+        pl(1, [t('a'), t('b'), t('r')], mode: 'liked'),
+      ],
+    );
+    expect(names(m.playlists.single), ['n2', 'n1', 'a', 'b', 'r', 'c']);
+  });
+
   test('a track removed here and one added there both apply', () {
     final base = [
       pl(1, [t('a'), t('b')]),
