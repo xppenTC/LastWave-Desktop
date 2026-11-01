@@ -80,6 +80,36 @@ void main() {
     expect(names(m.playlists.single), ['n2', 'n1', 'a', 'b', 'r', 'c']);
   });
 
+  test('a track moved or re-liked here keeps its place when the file kept its order', () {
+    final m = merge(
+      base: [
+        pl(1, [t('a'), t('b'), t('x')], mode: 'liked'),
+      ],
+      local: [
+        pl(1, [t('x'), t('a'), t('b')], mode: 'liked'),
+      ],
+      remote: [
+        pl(1, [t('a'), t('r'), t('b'), t('x')], mode: 'liked'),
+      ],
+    );
+    expect(names(m.playlists.single), ['x', 'a', 'r', 'b']);
+  });
+
+  test("the file's order wins when both sides reordered", () {
+    final m = merge(
+      base: [
+        pl(1, [t('a'), t('b'), t('c')]),
+      ],
+      local: [
+        pl(1, [t('c'), t('a'), t('b')]),
+      ],
+      remote: [
+        pl(1, [t('b'), t('a'), t('c')]),
+      ],
+    );
+    expect(names(m.playlists.single), ['b', 'a', 'c']);
+  });
+
   test('a track removed here and one added there both apply', () {
     final base = [
       pl(1, [t('a'), t('b')]),
