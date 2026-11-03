@@ -39,6 +39,50 @@ class OfficialArtworkService {
   final Map<String, OfficialArtworkResult> _cache = {};
   final Map<String, Future<OfficialArtworkResult?>> _inFlight = {};
 
+  /// Display-only memory of the non-official fallbacks (YouTube Music
+  /// cover / portrait) by the same cache key. Never written to SQLite and
+  /// never returned by [peekTrack] & co, so a later store hit still wins;
+  /// without it every revisit re-ran the lookup and the tile visibly
+  /// swapped from its original image to the fallback again.
+  final Map<String, OfficialArtworkResult> _fallbackCache = {};
+
+  void _rememberFallback(String key, OfficialArtworkResult result) {
+    final changed = _fallbackCache[key]?.artworkUrl != result.artworkUrl;
+    _fallbackCache.remove(key);
+    _fallbackCache[key] = result;
+    if (_fallbackCache.length > 500) {
+      _fallbackCache.remove(_fallbackCache.keys.first);
+    }
+    if (changed) _notify();
+  }
+
+  /// What a tile should show for this track right now: the official cover,
+  /// else a fallback resolved earlier this session. Synchronous, for the
+  /// first frame of a re-mounted tile.
+  OfficialArtworkResult? peekDisplayTrack({
+    required String title,
+    required String artist,
+  }) =>
+      peekTrack(title: title, artist: artist) ??
+      _fallbackCache[_trackCacheKey(artist, title)];
+
+  /// Album counterpart of [peekDisplayTrack].
+  OfficialArtworkResult? peekDisplayAlbum({
+    required String album,
+    required String artist,
+  }) =>
+      peekAlbum(album: album, artist: artist) ??
+      _fallbackCache[_albumCacheKey(artist, album)];
+
+  /// Artist counterpart of [peekDisplayTrack].
+  OfficialArtworkResult? peekDisplayArtist(String artist) {
+    final official = peekArtist(artist);
+    if (official != null) return official;
+    final clean = normalizeForSearch(primaryArtistName(artist));
+    if (clean.isEmpty) return null;
+    return _fallbackCache['artist4|$clean'];
+  }
+
   // Concurrency gate: a 30-row list view can trigger a burst of store
   // lookups at once; cap parallel network resolutions and queue the rest
   // so we never hammer the iTunes/Deezer search APIs. Artist lookups are
@@ -67,7 +111,7 @@ class OfficialArtworkService {
   }
 
   String _trackCacheKey(String artist, String title) =>
-      't4|${normalizeForSearch(artist)}|${normalizeForSearch(title)}';
+      't5|${normalizeForSearch(artist)}|${normalizeForSearch(title)}';
 
   String _albumCacheKey(String artist, String album) =>
       'album2|${normalizeForSearch(artist)}|${normalizeForSearch(album)}';
@@ -137,12 +181,15 @@ class OfficialArtworkService {
   OfficialArtworkResult? peekArtist(String artist) {
     final clean = normalizeForSearch(primaryArtistName(artist));
     if (clean.isEmpty) return null;
-    final key = 'artist3|$clean';
+    final key = 'artist4|$clean';
     final inMem = _cache[key];
     if (inMem != null) return inMem;
     if (_db != null) {
       final row = _db!.loadArtworkEntry(key);
-      if (row != null && row['url'] != null && row['url']!.isNotEmpty) {
+      if (row != null &&
+          row['url'] != null &&
+          row['url']!.isNotEmpty &&
+          !_isDeezerBlank(row['url']!)) {
         final res = OfficialArtworkResult(artworkUrl: row['url']!);
         _cache[key] = res;
         return res;
@@ -183,7 +230,8 @@ class OfficialArtworkService {
   /// Residency of the artwork plumbing: the result cache (bounded), the
   /// in-flight map, the listener list (a leak here would pin whole
   /// widget trees) and the concurrency queue.
-  String get debugGauge => 'cache=${_cache.length} inflight=${_inFlight.length} '
+  String get debugGauge => 'cache=${_cache.length} '
+      'fallback=${_fallbackCache.length} inflight=${_inFlight.length} '
       'listeners=${_listeners.length} queue=${_requestQueue.length} '
       'active=$_activeRequests';
 
@@ -345,7 +393,7 @@ class OfficialArtworkService {
         // Old rows could store a YouTube video still as "official"
         // (InnerTube fallback). Those must not win over a real store
         // cover — ignore and re-resolve.
-        if (isOfficialArtwork(url)) {
+        if (isOfficialArtwork(url) && !_isDeezerBlank(url)) {
           final cached = OfficialArtworkResult(artworkUrl: url);
           _cache[cacheKey] = cached;
           return cached;
@@ -390,6 +438,7 @@ class OfficialArtworkService {
     required String title,
     required String artist,
     String album = '',
+    bool allowFallback = false,
   }) async {
     final cleanTitle = normalizeForSearch(title);
     final cleanArtist = normalizeForSearch(artist);
@@ -398,29 +447,81 @@ class OfficialArtworkService {
     // Cache keys are versioned: t1–t3 could store a different song's
     // sleeve (substring hits like Cider→Cinderella or Piranha→Pt. 2).
     // Those rows are abandoned rather than trusted.
-    return _cached(
-      _trackCacheKey(artist, title),
-      'catalog',
-      () => _doResolve(cleanTitle, cleanArtist, title, artist, album),
-    );
+    OfficialArtworkResult? res;
+    try {
+      res = await _cached(
+        _trackCacheKey(artist, title),
+        'catalog',
+        () => _doResolve(cleanTitle, cleanArtist, title, artist, album),
+      );
+    } catch (_) {
+      // A store failure must not skip the fallback below.
+      if (!allowFallback) rethrow;
+    }
+    if (res != null || !allowFallback) return res;
+    final fallback = trackCoverFallback;
+    if (fallback == null) return null;
+    final key = _trackCacheKey(artist, title);
+    final known = _fallbackCache[key];
+    if (known != null) return known;
+    try {
+      final url = await fallback(title, artist);
+      if (url.isEmpty) return null;
+      final result = OfficialArtworkResult(
+          artworkUrl: url, artist: artist, title: title);
+      _rememberFallback(key, result);
+      return result;
+    } catch (_) {
+      return null;
+    }
   }
+
+  /// Square YouTube Music cover for songs neither iTunes nor Deezer
+  /// carry (indie / label-less releases) — what the player shows. Opt-in
+  /// via `allowFallback`, never cached as "official".
+  Future<String> Function(String title, String artist)? trackCoverFallback;
 
   /// Resolve the official cover for an ALBUM (not a track) via the
   /// iTunes album catalog — exact collection match beats track guessing.
   Future<OfficialArtworkResult?> resolveAlbumArtwork({
     required String album,
     required String artist,
+    bool allowFallback = false,
   }) async {
     final cleanAlbum = normalizeForSearch(album);
     final cleanArtist = normalizeForSearch(artist);
     if (cleanAlbum.isEmpty) return null;
 
-    return _cached(
-      _albumCacheKey(artist, album),
-      'catalog',
-      () => _doResolveAlbum(cleanAlbum, cleanArtist, album, artist),
-    );
+    OfficialArtworkResult? res;
+    try {
+      res = await _cached(
+        _albumCacheKey(artist, album),
+        'catalog',
+        () => _doResolveAlbum(cleanAlbum, cleanArtist, album, artist),
+      );
+    } catch (_) {
+      if (!allowFallback) rethrow;
+    }
+    if (res != null || !allowFallback) return res;
+    final fallback = albumCoverFallback;
+    if (fallback == null) return null;
+    final key = _albumCacheKey(artist, album);
+    final known = _fallbackCache[key];
+    if (known != null) return known;
+    try {
+      final url = await fallback(album, artist);
+      if (url.isEmpty) return null;
+      final result = OfficialArtworkResult(artworkUrl: url, artist: artist);
+      _rememberFallback(key, result);
+      return result;
+    } catch (_) {
+      return null;
+    }
   }
+
+  /// YouTube Music cover for albums/singles the stores don't carry; same
+  /// opt-in, never-cached contract as [trackCoverFallback].
+  Future<String> Function(String album, String artist)? albumCoverFallback;
 
   /// Resolve an official ARTIST photo via the Deezer catalog — label-
   /// supplied press shots up to 1000×1000, no auth required. (iTunes has
@@ -434,13 +535,38 @@ class OfficialArtworkService {
     // Key versioned: v1 entries could hold impostor acts picked before
     // the nb_fan (most-followed) selection existed; v2 used the raw
     // collab string ("drake future metro…") as the cache key.
-    return _cached(
-      'artist3|$clean',
+    final res = await _cached(
+      'artist4|$clean',
       'deezer',
       () => _doResolveArtist(clean, primary),
       priority: true,
     );
+    if (res != null) return res;
+    final fallback = artistPhotoFallback;
+    if (fallback == null) return null;
+    final key = 'artist4|$clean';
+    final known = _fallbackCache[key];
+    if (known != null) return known;
+    try {
+      final url = await fallback(primary);
+      if (url.isEmpty) return null;
+      final result = OfficialArtworkResult(artworkUrl: url, artist: primary);
+      _rememberFallback(key, result);
+      return result;
+    } catch (_) {
+      return null;
+    }
   }
+
+  /// Last-resort artist portrait (YouTube Music), wired by the app root.
+  /// Not cached as "official": a later Deezer hit still wins.
+  Future<String> Function(String name)? artistPhotoFallback;
+
+  /// Deezer serves a grey silhouette for artists without a photo, under
+  /// an empty hash (`/images/artist//1000x1000…`). It loads fine, so it
+  /// would never trigger an image fallback.
+  static bool _isDeezerBlank(String url) =>
+      url.contains('/artist//') || url.contains('d41d8cd98f00b204e9800998ecf8427e');
 
   /// Shared iTunes Search API round; returns the raw result list.
   /// 403/429 do not throw (validateStatus). After a couple of blocks
@@ -493,17 +619,8 @@ class OfficialArtworkService {
   Future<List<Map<String, dynamic>>> _deezerTrackHits(String query) async {
     if (query.trim().isEmpty) return const [];
     try {
-      final res = await _dio.get<dynamic>(
-        'https://api.deezer.com/search',
-        queryParameters: {'q': query.trim(), 'limit': '15'},
-      );
-      if (res.statusCode != 200) return const [];
-      dynamic rawData = res.data;
-      if (rawData is String && rawData.isNotEmpty) {
-        try {
-          rawData = jsonDecode(rawData);
-        } catch (_) {}
-      }
+      final rawData =
+          await _deezerGet('/search', {'q': query.trim(), 'limit': '15'});
       final data = rawData is Map ? rawData : null;
       final items = data != null && data['data'] is List
           ? (data['data'] as List).whereType<Map<String, dynamic>>()
@@ -712,6 +829,51 @@ class OfficialArtworkService {
     return null;
   }
 
+  /// Deezer GET with quota handling: its limit (50 req / 5 s) answers
+  /// HTTP 200 with `{"error":{"code":4}}` (or 429 / a dropped socket), which
+  /// used to read as "no such artist" and left the Last.fm star placeholder
+  /// on screen. Retries with backoff; null when it never succeeds.
+  Future<dynamic> _deezerGet(String path, Map<String, dynamic> query) async {
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        final res = await _dio.get<dynamic>(
+          'https://api.deezer.com$path',
+          queryParameters: query,
+        );
+        dynamic raw = res.data;
+        if (raw is String && raw.isNotEmpty) {
+          try {
+            raw = jsonDecode(raw);
+          } catch (_) {}
+        }
+        final limited =
+            res.statusCode == 429 || (raw is Map && raw['error'] != null);
+        if (!limited) return res.statusCode == 200 ? raw : null;
+      } catch (_) {}
+      await Future<void>.delayed(Duration(milliseconds: 900 * (attempt + 1)));
+    }
+    return null;
+  }
+
+  /// Artists without a photo still get a hashed URL that 302s to the stock
+  /// silhouette (`d41d8cd9…`, the MD5 of nothing), so the URL alone looks
+  /// real. Peek at the redirect target without downloading the image.
+  Future<bool> _deezerPhotoIsStock(String url) async {
+    try {
+      final res = await _dio.head<dynamic>(
+        url,
+        options: Options(
+          followRedirects: false,
+          validateStatus: (c) => c != null && c < 400,
+        ),
+      );
+      final loc = res.headers.value('location') ?? '';
+      return _isDeezerBlank(loc);
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<OfficialArtworkResult?> _doResolveArtist(
     String clean,
     String raw,
@@ -720,16 +882,8 @@ class OfficialArtworkService {
     final searchName = rawPrimary.isNotEmpty ? rawPrimary : raw;
     final cleanSearchName = normalizeForSearch(searchName);
     try {
-      final res = await _dio.get<dynamic>(
-        'https://api.deezer.com/search/artist',
-        queryParameters: {'q': searchName, 'limit': '10'},
-      );
-      dynamic rawData = res.data;
-      if (rawData is String && rawData.isNotEmpty) {
-        try {
-          rawData = jsonDecode(rawData);
-        } catch (_) {}
-      }
+      final rawData = await _deezerGet(
+          '/search/artist', {'q': searchName, 'limit': '10'});
       final data = rawData is Map ? rawData : null;
       final items = data != null && data['data'] is List
           ? (data['data'] as List)
@@ -789,7 +943,9 @@ class OfficialArtworkService {
               (e) => e.isNotEmpty,
               orElse: () => '',
             );
-        if (pic.isNotEmpty) {
+        if (pic.isNotEmpty &&
+            !_isDeezerBlank(pic) &&
+            !await _deezerPhotoIsStock(pic)) {
           return OfficialArtworkResult(
             artworkUrl: pic,
             artist: best['name']?.toString() ?? raw,
@@ -1025,6 +1181,15 @@ class OfficialArtworkService {
       if (looksLikeCompilation) score -= 60;
 
       if (collection.endsWith(' single')) score -= 15;
+
+      // The target title is normalized (feat. stripped), so a "Sirens
+      // (feat. …)" row from another film ties with the plain "Sirens"
+      // and used to win on the earliest-release tie-break. A bare title
+      // beats a featured one when nothing else separates them.
+      if (RegExp(r'[(\[]\s*(?:feat|ft\.?|featuring)\b', caseSensitive: false)
+          .hasMatch(trackName)) {
+        score -= 5;
+      }
 
       if (score >= 170) {
         DateTime? released;

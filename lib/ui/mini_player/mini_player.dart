@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:fluent_ui/fluent_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:window_manager/window_manager.dart';
@@ -69,15 +71,21 @@ class _WaveMiniPlayerState extends ConsumerState<WaveMiniPlayer> {
         width: double.infinity,
         height: double.infinity,
         decoration: BoxDecoration(
-          color: dark ? waveSurfaceRaised(context) : WaveColors.lightSurface,
+          color: dark ? waveSurfaceRaised(context) : waveSurface(context),
           border: Border.all(
             color: waveDivider(context).withValues(alpha: dark ? 0.35 : 0.6),
             width: 1,
           ),
         ),
-        child: current == null
-            ? _buildEmptyState(context, dark)
-            : _buildPlayerContent(context, dark, current, snap, notifier),
+        // macOS keeps the native traffic lights above this chromeless
+        // window even in mini mode; clear their corner (they end
+        // around x=74) so the grip/artwork do not sit underneath them.
+        child: Padding(
+          padding: EdgeInsets.only(left: Platform.isMacOS ? 76 : 0),
+          child: current == null
+              ? _buildEmptyState(context, dark)
+              : _buildPlayerContent(context, dark, current, snap, notifier),
+        ),
       ),
     );
   }

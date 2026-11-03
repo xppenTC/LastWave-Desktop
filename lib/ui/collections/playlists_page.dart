@@ -1,10 +1,15 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:fluent_ui/fluent_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../features/search/shared_providers.dart';
 import '../../features/innertube/innertube_api.dart';
 import '../../features/innertube/yt_library_providers.dart';
+import '../../features/library/local_music_library.dart';
 import '../../features/library/playlists.dart';
+import '../../features/library/yt_library_sync.dart';
+import '../../features/spotify/spotify_api.dart';
 import '../components/artwork.dart';
 import '../components/buttons.dart';
 import '../components/hero.dart';
@@ -34,11 +39,51 @@ class _WavePlaylistsPageState
     extends ConsumerState<WavePlaylistsPage> {
   final _filter = TextEditingController();
   String _q = '';
+  bool _selecting = false;
+  final Set<int> _selected = {};
 
   @override
   void dispose() {
     _filter.dispose();
     super.dispose();
+  }
+
+  Future<void> _deleteSelected() async {
+    final doomed = ref
+        .read(playlistRepositoryProvider)
+        .where((p) =>
+            _selected.contains(p.id) && !p.isLikedSongs && !p.isLocal)
+        .toList();
+    if (doomed.isEmpty || !mounted) return;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => ContentDialog(
+        title: const Text('Delete playlists?'),
+        content: Text(
+          '${doomed.length} playlist${doomed.length == 1 ? '' : 's'} will be removed, including any copy on YouTube Music. Liked Songs and Local songs stay.',
+        ),
+        actions: [
+          WaveButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          WaveFilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+    final repo = ref.read(playlistRepositoryProvider.notifier);
+    for (final playlist in doomed) {
+      await repo.delete(playlist.id);
+    }
+    if (!mounted) return;
+    setState(() {
+      _selecting = false;
+      _selected.clear();
+    });
   }
 
   @override
@@ -53,15 +98,39 @@ class _WavePlaylistsPageState
               p.title.toLowerCase().contains(_q.toLowerCase()),
         )
         .toList();
-    // Signed-in YouTube Music playlists (own + liked), read-only.
-    // Rendered as their own section below the local grid.
+    // YouTube Music playlists not linked to a row above: the ones saved from
+    // other people, which YouTube won't let this account edit. Read-only.
+    final linked = ref.watch(ytSyncStatusProvider).linkedRemoteIds;
     final ytLists = (ref.watch(ytAccountPlaylistsProvider).value ??
             const [])
         .where(
           (p) =>
+              !linked.contains(YtLibrarySync.bareId(p.id)) &&
               p.title.toLowerCase().contains(_q.toLowerCase()),
         )
         .toList();
+    // Spotify account playlists + Liked Songs. Shown here only: Spotify
+    // likes are deliberately never merged into the app's own Liked page.
+    final spLists = (ref.watch(spotifyPlaylistsProvider).value ??
+            const <SpotifyPlaylistSummary>[])
+        .where((p) => p.name.toLowerCase().contains(_q.toLowerCase()))
+        .toList();
+    // Header cover: the most recent playlist (list order) that has art.
+    var heroCover = '';
+    for (final p in all) {
+      if (p.customCoverUri.isNotEmpty && !p.customCoverUri.startsWith('/') &&
+          p.customCoverUri.startsWith('http')) {
+        heroCover = p.customCoverUri;
+        break;
+      }
+      for (final t in p.tracks) {
+        if (t.artworkUrl.isNotEmpty) {
+          heroCover = t.artworkUrl;
+          break;
+        }
+      }
+      if (heroCover.isNotEmpty) break;
+    }
     // Full-width, left-aligned like the Liked/table pages — the grid
     // below fills the viewport instead of bunching in a centered cap.
     return WaveEntranceGroup(
@@ -81,7 +150,8 @@ class _WavePlaylistsPageState
                 overline: 'Collect',
                 title: 'Playlists',
                 meta: '${all.length} playlists',
-                fallbackIcon: FluentIcons.list_mirrored,
+                artworkUrl: heroCover,
+                fallbackIcon: WaveIcons.playlists,
                 primaryActions: [
                   WavePrimaryButton(
                     label: 'New',
@@ -101,6 +171,28 @@ class _WavePlaylistsPageState
                       ref,
                     ),
                   ),
+                  if (_selecting) ...[
+                    WaveGhostButton(
+                      label: 'Delete',
+                      icon: FluentIcons.delete,
+                      onPressed:
+                          _selected.isEmpty ? null : _deleteSelected,
+                    ),
+                    WaveGhostButton(
+                      label: 'Done',
+                      icon: FluentIcons.check_mark,
+                      onPressed: () => setState(() {
+                        _selecting = false;
+                        _selected.clear();
+                      }),
+                    ),
+                  ] else
+                    WaveGhostButton(
+                      label: 'Select',
+                      icon: FluentIcons.multi_select,
+                      onPressed: () =>
+                          setState(() => _selecting = true),
+                    ),
                 ],
               ),
               ),
@@ -113,9 +205,11 @@ class _WavePlaylistsPageState
                 countLabel: '${shown.length} shown',
               ),
               const SizedBox(height: 12),
-              if (shown.isEmpty && ytLists.isEmpty)
+              const _LocalFolders(),
+              const SizedBox(height: 18),
+              if (shown.isEmpty && ytLists.isEmpty && spLists.isEmpty)
                 WaveEmpty(
-                  icon: FluentIcons.list_mirrored,
+                  icon: WaveIcons.playlists,
                   title: 'No playlists yet',
                   subtitle: _q.isEmpty
                       ? 'Create your first playlist to organise what you love.'
@@ -143,20 +237,36 @@ class _WavePlaylistsPageState
                       mainAxisExtent: 218,
                     ),
                     itemCount: shown.length,
-                    itemBuilder: (context, i) =>
-                        WaveEntrance(
+                    itemBuilder: (context, i) {
+                      final playlist = shown[i];
+                      final protected =
+                          playlist.isLikedSongs || playlist.isLocal;
+                      return WaveEntrance(
                       index: i,
                       rise: 10,
                       child: _PlaylistCard(
-                        playlist: shown[i],
+                        playlist: playlist,
                         artSize: 160,
+                        selecting: _selecting && !protected,
+                        selected: _selected.contains(playlist.id),
+                        onSelect: () => setState(() {
+                          if (!_selected.add(playlist.id)) {
+                            _selected.remove(playlist.id);
+                          }
+                        }),
                       ),
-                    ),
+                    );
+                    },
                   ),
                 if (ytLists.isNotEmpty) ...[
                   if (shown.isNotEmpty)
                     const SizedBox(height: 18),
                   _YtSection(lists: ytLists),
+                ],
+                if (spLists.isNotEmpty) ...[
+                  if (shown.isNotEmpty || ytLists.isNotEmpty)
+                    const SizedBox(height: 18),
+                  _SpotifySection(lists: spLists),
                 ],
               ],
             ],
@@ -169,6 +279,7 @@ class _WavePlaylistsPageState
 }
 
 String? _coverOf(SavedPlaylist p) {
+  if (p.customCoverUri.isNotEmpty) return p.customCoverUri;
   for (final t in p.tracks) {
     if (t.artworkUrl.isNotEmpty) return t.artworkUrl;
   }
@@ -350,11 +461,155 @@ class _YtCardState extends ConsumerState<_YtCard> {
   }
 }
 
+/// Spotify account playlists (own + followed) and Liked Songs.
+/// Read-only grid; tap opens the Spotify detail page.
+class _SpotifySection extends StatelessWidget {
+  final List<SpotifyPlaylistSummary> lists;
+  const _SpotifySection({required this.lists});
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('SPOTIFY',
+            style: WaveType.overline.copyWith(color: waveAccent(context))),
+        const SizedBox(height: 2),
+        Text('${lists.length} ${lists.length == 1 ? 'playlist' : 'playlists'}',
+            style:
+                WaveType.meta.copyWith(color: waveTextTertiary(context))),
+        const SizedBox(height: 6),
+        GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: 180,
+            mainAxisSpacing: 16,
+            crossAxisSpacing: 12,
+            mainAxisExtent: 218,
+          ),
+          itemCount: lists.length,
+          itemBuilder: (context, i) => WaveEntrance(
+            index: i,
+            rise: 10,
+            child: _SpotifyCard(playlist: lists[i], artSize: 160),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SpotifyCard extends StatefulWidget {
+  final SpotifyPlaylistSummary playlist;
+  final double artSize;
+  const _SpotifyCard({required this.playlist, required this.artSize});
+
+  @override
+  State<_SpotifyCard> createState() => _SpotifyCardState();
+}
+
+class _SpotifyCardState extends State<_SpotifyCard> {
+  bool _hover = false;
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = waveIsDark(context);
+    final p = widget.playlist;
+    void open() => waveOpen(
+          context,
+          '/spotifyplaylist/${Uri.encodeComponent(p.id)}'
+          '?title=${Uri.encodeComponent(p.name)}'
+          '&art=${Uri.encodeComponent(p.artworkUrl)}',
+        );
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() {
+        _hover = false;
+        _pressed = false;
+      }),
+      child: GestureDetector(
+        onTapDown: (_) => setState(() => _pressed = true),
+        onTapUp: (_) => setState(() => _pressed = false),
+        onTapCancel: () => setState(() => _pressed = false),
+        onTap: open,
+        child: AnimatedScale(
+          scale: _pressed ? 0.97 : (_hover ? 1.03 : 1.0),
+          duration: waveMotion(context, WaveMotion.fast),
+          curve: Curves.easeOutCubic,
+          child: AnimatedContainer(
+            duration: waveMotion(context, WaveMotion.normal),
+            curve: Curves.easeOutCubic,
+            decoration: BoxDecoration(
+              borderRadius: WaveRadius.artworkRadius,
+              boxShadow: [if (_hover) ...WaveElevation.lift(dark)],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                p.isLiked
+                    ? Container(
+                        width: widget.artSize,
+                        height: widget.artSize,
+                        decoration: BoxDecoration(
+                          borderRadius: WaveRadius.artworkRadius,
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [
+                              waveAccent(context),
+                              waveAccent(context).withValues(alpha: 0.45),
+                            ],
+                          ),
+                        ),
+                        child: Icon(
+                          WaveIcons.likedFill,
+                          size: 44,
+                          color: waveOnAccent(context),
+                        ),
+                      )
+                    : WaveArtwork(
+                        url: p.artworkUrl,
+                        size: widget.artSize,
+                        radius: WaveRadius.artwork,
+                        label: p.name,
+                      ),
+                const SizedBox(height: 6),
+                Text(p.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: WaveType.trackTitle.copyWith(fontSize: 12.5)),
+                Text(
+                  p.trackCount > 0
+                      ? '${p.trackCount} tracks'
+                      : (p.owner.isNotEmpty ? p.owner : 'Spotify playlist'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: WaveType.meta.copyWith(fontSize: 11.5),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _PlaylistCard extends ConsumerStatefulWidget {
   final SavedPlaylist playlist;
   final double artSize;
-  const _PlaylistCard(
-      {required this.playlist, this.artSize = 150});
+  final bool selecting;
+  final bool selected;
+  final VoidCallback? onSelect;
+  const _PlaylistCard({
+    required this.playlist,
+    this.artSize = 150,
+    this.selecting = false,
+    this.selected = false,
+    this.onSelect,
+  });
   @override
   ConsumerState<_PlaylistCard> createState() =>
       _PlaylistCardState();
@@ -370,14 +625,21 @@ class _PlaylistCardState
     final p = widget.playlist;
     final dark = waveIsDark(context);
     final cover = _coverOf(p);
-    void play() => context.go('/playlists/${p.id}');
+    void open() => context.go('/playlists/${p.id}');
+    void play() {
+      if (widget.selecting) {
+        widget.onSelect?.call();
+        return;
+      }
+      open();
+    }
     return WaveContextMenu(
       items: () => [
         WaveMenuAction(
           leading:
               const Icon(FluentIcons.play, size: 13),
           label: 'Open',
-          onPressed: play,
+          onPressed: open,
         ),
         WaveMenuAction(
           leading: Icon(
@@ -397,7 +659,7 @@ class _PlaylistCardState
           onPressed: () => showWaveRenamePlaylist(
               context, ref, p),
         ),
-        if (!p.isLikedSongs)
+        if (!p.isLikedSongs && !p.isLocal)
           WaveMenuAction(
             leading: const Icon(FluentIcons.delete,
                 size: 13),
@@ -434,6 +696,9 @@ class _PlaylistCardState
                         .withValues(alpha: 0.05)
                     : Colors.transparent,
                 borderRadius: WaveRadius.artworkRadius,
+                border: widget.selected
+                    ? Border.all(color: waveAccent(context), width: 2)
+                    : null,
                 boxShadow: [
                   if (_hover) ...WaveElevation.lift(dark),
                 ],
@@ -449,6 +714,18 @@ class _PlaylistCardState
                           size: widget.artSize,
                           radius: WaveRadius.artwork,
                           label: p.title),
+                      if (widget.selecting)
+                        Positioned(
+                          right: 8,
+                          top: 8,
+                          child: Icon(
+                            widget.selected
+                                ? FluentIcons.checkbox_composite
+                                : FluentIcons.checkbox,
+                            size: 18,
+                            color: Colors.white,
+                          ),
+                        ),
                       if (p.isPinned)
                         Positioned(
                           left: 6,
@@ -530,7 +807,10 @@ class _PlaylistCardState
                       overflow: TextOverflow.ellipsis,
                       style: WaveType.trackTitle
                           .copyWith(fontSize: 12.5)),
-                  Text('${p.tracks.length} tracks',
+                  Text(
+                      p.isLocal
+                          ? 'On this PC · ${p.tracks.length} tracks'
+                          : '${p.tracks.length} tracks',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: WaveType.meta
@@ -541,6 +821,94 @@ class _PlaylistCardState
           ),
         ),
       ),
+    );
+  }
+}
+
+class _LocalFolders extends ConsumerWidget {
+  const _LocalFolders();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final folders = ref.watch(databaseProvider).localFolders();
+    final scan = ref.watch(localScanProvider);
+    final busy = scan.running;
+
+    Future<void> add() async {
+      final path = await FilePicker.getDirectoryPath(
+        dialogTitle: 'Add a music folder',
+      );
+      if (path == null || path.trim().isEmpty) return;
+      await ref.read(localMusicLibraryProvider).addFolder(path.trim());
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'ON THIS PC',
+          style: WaveType.overline.copyWith(color: waveAccent(context)),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          busy
+              ? scan.label
+              : (scan.label.isEmpty
+                  ? 'Play files from folders you choose. Local songs stay on this PC and are never uploaded.'
+                  : scan.label),
+          style: WaveType.meta.copyWith(color: waveTextSecondary(context)),
+        ),
+        const SizedBox(height: 8),
+        for (final folder in folders)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    folder,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: WaveType.trackTitle,
+                  ),
+                ),
+                WaveGhostButton(
+                  label: 'Forget',
+                  onPressed: busy
+                      ? null
+                      : () => ref
+                          .read(localMusicLibraryProvider)
+                          .forgetFolder(folder),
+                ),
+              ],
+            ),
+          ),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            WaveGhostButton(
+              label: 'Add folder',
+              icon: FluentIcons.add,
+              onPressed: busy ? null : add,
+            ),
+            WaveGhostButton(
+              label: 'Rescan',
+              icon: FluentIcons.refresh,
+              onPressed: busy
+                  ? null
+                  : () => ref.read(localMusicLibraryProvider).rescan(),
+            ),
+            if (busy)
+              const SizedBox(
+                width: 16,
+                height: 16,
+                child: ProgressRing(strokeWidth: 2),
+              ),
+          ],
+        ),
+      ],
     );
   }
 }

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:fluent_ui/fluent_ui.dart';
 
@@ -94,6 +96,17 @@ class _WaveArtworkState extends State<WaveArtwork> {
       widget.kind ??
       (widget.isCircle ? ArtworkKind.artist : ArtworkKind.track);
 
+  /// [WaveArtwork.url] minus images that load fine but show nothing: the
+  /// Last.fm star placeholder and Deezer's blank-artist silhouette.
+  String get _primaryUrl {
+    final u = widget.url;
+    if (u.contains('2a96cbd8b46e442fc41c2b86b821562f') ||
+        u.contains('/artist//')) {
+      return '';
+    }
+    return u;
+  }
+
   bool _fallbacksEqual(List<String> a, List<String> b) {
     if (identical(a, b)) return true;
     if (a.length != b.length) return false;
@@ -110,14 +123,38 @@ class _WaveArtworkState extends State<WaveArtwork> {
     _checkSynchronousArtwork();
   }
 
-  void _checkSynchronousArtwork() {
-    if (_kind == ArtworkKind.artist) return;
+  /// The image this tile settled on last time, known synchronously:
+  /// official store art or a fallback resolved earlier this session.
+  /// Artist circles included — they used to skip this, so every revisit
+  /// painted the original photo first and then swapped to the press photo.
+  OfficialArtworkResult? _peekDisplay() {
     final title = widget.title.isNotEmpty ? widget.title : widget.label;
     final artist = widget.artist;
-    if (title.isEmpty) return;
-    final hit = _kind == ArtworkKind.album
-        ? OfficialArtworkService.instance.peekAlbum(album: title, artist: artist)
-        : OfficialArtworkService.instance.peekTrack(title: title, artist: artist);
+    final service = OfficialArtworkService.instance;
+    switch (_kind) {
+      case ArtworkKind.artist:
+        final name = artist.isNotEmpty ? artist : title;
+        if (name.isEmpty) return null;
+        return service.peekDisplayArtist(name);
+      case ArtworkKind.album:
+        if (title.isEmpty) return null;
+        return service.peekDisplayAlbum(album: title, artist: artist);
+      case ArtworkKind.track:
+        if (title.isEmpty) return null;
+        return service.peekDisplayTrack(title: title, artist: artist);
+    }
+  }
+
+  void _checkSynchronousArtwork() {
+    // Identity avatars (account photo, friends) never take a store image:
+    // a user named like an artist would get that artist's photo.
+    if (!widget.upgrade) return;
+    if (_fileArtworkPath(widget.url) != null) return;
+    if (_kind == ArtworkKind.artist &&
+        OfficialArtworkService.isOfficialArtistPhoto(_primaryUrl)) {
+      return;
+    }
+    final hit = _peekDisplay();
     if (hit != null && hit.artworkUrl.isNotEmpty) {
       _resolvedUrl = hit.artworkUrl;
       _resolveFailed = false;
@@ -125,22 +162,44 @@ class _WaveArtworkState extends State<WaveArtwork> {
     }
   }
 
+  /// URLs a tile has shown successfully this session (insertion-ordered,
+  /// capped). Coming back to a page re-mounts its tiles; if the decoded
+  /// image was evicted from memory it reloads from disk, which takes a
+  /// frame or two. For these URLs that reload is painted as a quiet
+  /// surface tone with no fade, instead of the coloured initials tile
+  /// fading into the cover, which read as the artwork resetting.
+  static final Set<String> _shownUrls = <String>{};
+  static const int _shownUrlsCap = 3000;
+
+  String? _shownUrl;
+  DateTime _shownSince = DateTime.now();
+  final Set<String> _failedUrls = <String>{};
+
+  /// Records [_shownUrl] as seen if it stayed on screen long enough to
+  /// have loaded and never errored here.
+  void _commitShown() {
+    final url = _shownUrl;
+    if (url == null || url.isEmpty || _failedUrls.contains(url)) return;
+    if (DateTime.now().difference(_shownSince).inMilliseconds < 400) return;
+    _shownUrls.remove(url);
+    _shownUrls.add(url);
+    if (_shownUrls.length > _shownUrlsCap) {
+      _shownUrls.remove(_shownUrls.first);
+    }
+  }
+
   @override
   void dispose() {
+    _commitShown();
     OfficialArtworkService.instance.removeListener(_onArtworkCache);
     super.dispose();
   }
 
   /// Playback / another tile found a studio cover — swap this one too.
   void _onArtworkCache() {
-    if (!mounted) return;
-    if (_kind == ArtworkKind.artist) return;
-    final title = widget.title.isNotEmpty ? widget.title : widget.label;
-    final artist = widget.artist;
-    if (title.isEmpty) return;
-    final hit = _kind == ArtworkKind.album
-        ? OfficialArtworkService.instance.peekAlbum(album: title, artist: artist)
-        : OfficialArtworkService.instance.peekTrack(title: title, artist: artist);
+    if (!mounted || !widget.upgrade) return;
+    if (_fileArtworkPath(widget.url) != null) return;
+    final hit = _peekDisplay();
     if (hit == null || hit.artworkUrl.isEmpty) return;
     if (_resolvedUrl == hit.artworkUrl) return;
     setState(() {
@@ -154,7 +213,7 @@ class _WaveArtworkState extends State<WaveArtwork> {
           kind: _kind,
           candidates: [
             hit.artworkUrl,
-            widget.url,
+            _primaryUrl,
             ...widget.fallbackUrls,
           ],
           label: widget.label,
@@ -212,7 +271,7 @@ class _WaveArtworkState extends State<WaveArtwork> {
     final target = (widget.size * dpr).clamp(64, 1024).toDouble();
     final candidates = [
       if (_resolvedUrl != null && _resolvedUrl!.isNotEmpty) _resolvedUrl!,
-      widget.url,
+      _primaryUrl,
       ...widget.fallbackUrls,
     ];
     final req = ArtworkRequest(
@@ -244,6 +303,7 @@ class _WaveArtworkState extends State<WaveArtwork> {
   /// stays in the chain as fallback if the official source has no match.
   void _maybeUpgradeOfficial() {
     if (!widget.upgrade) return;
+    if (_fileArtworkPath(widget.url) != null) return;
     if (_upgradeAttempted || _resolveFailed || _isResolving) return;
     if (_resolvedUrl != null) return;
     final title = widget.title.isNotEmpty ? widget.title : widget.label;
@@ -264,7 +324,7 @@ class _WaveArtworkState extends State<WaveArtwork> {
     // press photo — an iTunes album cover is official, but it is the
     // wrong kind of image for an artist tile.
     if (_kind == ArtworkKind.artist) {
-      if (OfficialArtworkService.isOfficialArtistPhoto(widget.url)) {
+      if (OfficialArtworkService.isOfficialArtistPhoto(_primaryUrl)) {
         return;
       }
     } else if (OfficialArtworkService.isOfficialArtwork(widget.url)) {
@@ -288,17 +348,23 @@ class _WaveArtworkState extends State<WaveArtwork> {
       ArtworkKind.artist => service
           .resolveArtistArtwork(artist.isNotEmpty ? artist : title),
       ArtworkKind.album =>
-        service.resolveAlbumArtwork(album: title, artist: artist),
+        service.resolveAlbumArtwork(
+            album: title, artist: artist, allowFallback: true),
       ArtworkKind.track =>
-        service.resolveOfficialArtwork(title: title, artist: artist),
+        service.resolveOfficialArtwork(
+            title: title, artist: artist, allowFallback: true),
     };
     task.then((res) {
       if (!mounted) return;
       _isResolving = false;
       if (res != null && res.artworkUrl.isNotEmpty) {
         final usable = _kind == ArtworkKind.artist
-            ? OfficialArtworkService.isOfficialArtistPhoto(res.artworkUrl)
-            : OfficialArtworkService.isOfficialArtwork(res.artworkUrl);
+            // Deezer photo, or the YouTube Music portrait fallback.
+            ? res.artworkUrl.startsWith('http')
+            : _kind != ArtworkKind.artist
+                // Store cover, or the YouTube Music cover fallback.
+                ? res.artworkUrl.startsWith('http')
+                : OfficialArtworkService.isOfficialArtwork(res.artworkUrl);
         if (!usable) {
           _resolveFailed = true;
           return;
@@ -313,7 +379,7 @@ class _WaveArtworkState extends State<WaveArtwork> {
             kind: _kind,
             candidates: [
               res.artworkUrl,
-              widget.url,
+              _primaryUrl,
               ...widget.fallbackUrls,
             ],
             label: widget.label,
@@ -325,13 +391,30 @@ class _WaveArtworkState extends State<WaveArtwork> {
           _attempt = 0;
         });
       } else {
-        _resolveFailed = true;
+        _failAndRetryLater();
       }
     }).catchError((_) {
       if (mounted) {
         _isResolving = false;
-        _resolveFailed = true;
+        _failAndRetryLater();
       }
+    });
+  }
+
+  bool _retriedResolve = false;
+
+  /// A miss is often transient (store quota, offline blip), so give the
+  /// tile one more try later instead of leaving a placeholder for good.
+  void _failAndRetryLater() {
+    _resolveFailed = true;
+    if (_retriedResolve) return;
+    _retriedResolve = true;
+    final gen = _gen;
+    Future<void>.delayed(const Duration(seconds: 8), () {
+      if (!mounted || gen != _gen || _resolvedUrl != null) return;
+      _resolveFailed = false;
+      _upgradeAttempted = false;
+      _maybeUpgradeOfficial();
     });
   }
 
@@ -432,6 +515,8 @@ class _WaveArtworkState extends State<WaveArtwork> {
     final errorKey = '$gen|$index|$attempt';
     if (_handledError == errorKey) return;
     _handledError = errorKey;
+    _failedUrls.add(_chain[index]);
+    _shownUrls.remove(_chain[index]);
     await ArtworkResolver.evict(_chain[index]);
     if (!mounted || gen != _gen || index != _chainIndex ||
         attempt != _attempt) {
@@ -471,9 +556,69 @@ class _WaveArtworkState extends State<WaveArtwork> {
     return snapped < _decodeStep ? _decodeStep : snapped;
   }
 
+  /// Local cover: a filesystem path or a `file://` URI. Network URLs stay
+  /// on the cached-image path below.
+  String? _fileArtworkPath(String raw) {
+    final url = raw.trim();
+    if (url.isEmpty) return null;
+    if (url.startsWith('file:')) {
+      try {
+        final path = Uri.parse(url).toFilePath(windows: Platform.isWindows);
+        return path.isEmpty ? null : path;
+      } catch (_) {
+        return null;
+      }
+    }
+    if (url.startsWith('http://') ||
+        url.startsWith('https://') ||
+        url.startsWith('data:')) {
+      return null;
+    }
+    if (url.contains('://')) return null;
+    final windowsDrive = RegExp(r'^[a-zA-Z]:[\\/]');
+    final looksLikePath = url.contains('\\') ||
+        url.startsWith('/') ||
+        url.startsWith(r'\\') ||
+        windowsDrive.hasMatch(url);
+    if (!looksLikePath) return null;
+    return url;
+  }
+
+  Widget? _fileImage(BuildContext context, bool dark) {
+    final path = _fileArtworkPath(widget.url);
+    if (path == null) return null;
+    final file = File(path);
+    final image = file.existsSync()
+        ? Image.file(
+            file,
+            width: widget.size,
+            height: widget.size,
+            fit: BoxFit.cover,
+            errorBuilder: (context, _, _) => _fallback(context, dark),
+          )
+        : _fallback(context, dark);
+    if (widget.isCircle) {
+      return SizedBox(
+        width: widget.size,
+        height: widget.size,
+        child: ClipOval(child: image),
+      );
+    }
+    return SizedBox(
+      width: widget.size,
+      height: widget.size,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(widget.radius),
+        child: image,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final dark = waveIsDark(context);
+    final local = _fileImage(context, dark);
+    if (local != null) return local;
     if (_chain.isEmpty || _chainIndex >= _chain.length) {
       return _fallback(context, dark);
     }
@@ -512,6 +657,13 @@ class _WaveArtworkState extends State<WaveArtwork> {
     final int diskCache = targetPhysical <= 320 ? 512 : 1024;
     final isSmall = widget.size <= 56;
     final isResolved = _resolvedUrl != null;
+    if (currentUrl != _shownUrl) {
+      _commitShown();
+      _shownUrl = currentUrl;
+      _shownSince = DateTime.now();
+    }
+    final seenBefore = _shownUrls.contains(currentUrl);
+    final noFade = isSmall || isResolved || seenBefore;
     final image = RepaintBoundary(
       child: CachedNetworkImage(
         key: ValueKey('artwork|$_attempt'),
@@ -524,10 +676,16 @@ class _WaveArtworkState extends State<WaveArtwork> {
         maxHeightDiskCache: diskCache,
         fit: BoxFit.cover,
         useOldImageOnUrlChange: true,
-        fadeInDuration: (isSmall || isResolved) ? Duration.zero : WaveMotion.fast,
-        fadeOutDuration: (isSmall || isResolved) ? Duration.zero : WaveMotion.fast,
+        fadeInDuration: noFade ? Duration.zero : WaveMotion.fast,
+        fadeOutDuration: noFade ? Duration.zero : WaveMotion.fast,
         placeholderFadeInDuration: Duration.zero,
-        placeholder: (context, _) => _fallback(context, dark),
+        placeholder: (context, _) => seenBefore
+            ? SizedBox(
+                width: widget.size,
+                height: widget.size,
+                child: ColoredBox(color: waveSurfaceOverlay(context)),
+              )
+            : _fallback(context, dark),
         errorWidget: (context, _, _) {
           WidgetsBinding.instance.addPostFrameCallback(
               (_) => _onError(gen, index, attempt));

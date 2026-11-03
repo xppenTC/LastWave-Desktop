@@ -10,6 +10,7 @@ class SecureStore {
   static const _ytCookies = 'lastwave.yt_cookies';
   static const _ytProfiles = 'lastwave.yt_profiles';
   static const _ytActive = 'lastwave.yt_active';
+  static const _spotifySpDc = 'lastwave.spotify_sp_dc';
 
   final FlutterSecureStorage _storage;
   final Map<String, String> _memoryFallback = {};
@@ -60,6 +61,9 @@ class SecureStore {
   /// Other features' credentials (e.g. the Google Drive refresh token).
   Future<String?> readSecret(String key) => _read(key);
   Future<void> writeSecret(String key, String? value) => _write(key, value);
+  /// Spotify `sp_dc` session cookie (WebView sign-in or pasted).
+  Future<String?> readSpotifySpDc() => _read(_spotifySpDc);
+  Future<void> writeSpotifySpDc(String? v) => _write(_spotifySpDc, v);
 
   Future<void> clearAll() async {
     _memoryFallback.clear();

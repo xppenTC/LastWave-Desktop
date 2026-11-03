@@ -60,7 +60,7 @@ class WaveTitleBar extends ConsumerWidget {
       enableBlur: false,
       base: dark
           ? waveBackground(context).withValues(alpha: 0.85)
-          : WaveColors.lightBackground.withValues(alpha: 0.9),
+          : waveBackground(context).withValues(alpha: 0.9),
       border: Border(
         bottom: BorderSide(color: waveDivider(context)),
       ),
@@ -74,7 +74,11 @@ class WaveTitleBar extends ConsumerWidget {
                 (maxW * 0.28).clamp(140.0, 300.0).toDouble();
             return Row(
               children: [
-                const SizedBox(width: 6),
+                // macOS keeps the native traffic lights over the
+                // chromeless window; clear their corner (the lights
+                // end around x=74) instead of letting the nav buttons
+                // sit underneath them.
+                SizedBox(width: Platform.isMacOS ? 84 : 6),
                 _BarBtn(
                   tooltip: 'Toggle navigation',
                   icon: WaveIcons.panelLeft,
@@ -156,8 +160,8 @@ class WaveTitleBar extends ConsumerWidget {
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         color: dark
-                            ? WaveColors.surfaceRaised
-                            : WaveColors.lightOverlay,
+                            ? waveSurfaceRaised(context)
+                            : waveSurfaceOverlay(context),
                         border:
                             Border.all(color: waveDivider(context)),
                       ),
@@ -363,8 +367,8 @@ class _WaveSearchBoxState extends ConsumerState<_WaveSearchBox> {
                             horizontal: 5, vertical: 2),
                         decoration: BoxDecoration(
                           color: dark
-                              ? WaveColors.surfaceRaised
-                              : WaveColors.lightOverlay,
+                              ? waveSurfaceRaised(context)
+                              : waveSurfaceOverlay(context),
                           borderRadius: WaveRadius.tinyRadius,
                           border: Border.all(
                             color: waveDivider(context).withValues(alpha: 0.5),
@@ -485,12 +489,6 @@ class _AppMenu extends StatelessWidget {
           label: 'Search',
           hint: 'Ctrl+K',
           onPressed: () => context.go('/search'),
-        ),
-        WaveMenuAction(
-          leading: const Icon(WaveIcons.lyrics, size: 15),
-          label: 'Lyrics',
-          hint: 'Ctrl+L',
-          onPressed: () => context.go('/lyrics'),
         ),
         const WaveMenuSeparator(),
         WaveMenuAction(

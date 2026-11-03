@@ -73,9 +73,10 @@ class Prefs {
   }
 
   // -- Audio quality (mirrors Android quality tiers) ---------------------
-  /// -1 = YouTube only, 5 = 320k MP3, 6 = 16/44.1 FLAC,
-  /// 7 = 24/96, 27 = 24/192, 28 = Dolby Atmos.
-  static const allowedQualities = [-1, 5, 6, 7, 27, 28];
+  /// -1 = YouTube only, 4 = data saver (no addon 96 kbps code;
+  /// playback prefers the smallest YouTube audio), 5 = 320k MP3,
+  /// 6 = 16/44.1 FLAC, 7 = 24/96, 27 = 24/192, 28 = Dolby Atmos.
+  static const allowedQualities = [-1, 4, 5, 6, 7, 27, 28];
 
   bool get preferLossless =>
       _sp.getBool('lw_prefer_lossless_streaming') ?? true;
@@ -117,6 +118,9 @@ class Prefs {
 
   Future<void> setCrossfade(bool enabled, [int? seconds]) async {
     await _sp.setBool('lw_crossfade_enabled', enabled);
+    if (enabled) {
+      await _sp.setBool('lw_automix_enabled', false);
+    }
     if (seconds != null) {
       await _sp.setInt('lw_crossfade_seconds', seconds.clamp(3, 12));
     }
@@ -144,6 +148,52 @@ class Prefs {
   bool get wasapiExclusive => _sp.getBool('lw_wasapi_exclusive') ?? false;
   Future<void> setWasapiExclusive(bool v) =>
       _sp.setBool('lw_wasapi_exclusive', v);
+
+  // -- Loudness (ReplayGain, not a file scan) ------------------------------
+  /// `off`, `track`, or `album`.
+  String get loudnessMode {
+    final raw = (_sp.getString('lw_loudness_mode') ?? 'off').toLowerCase();
+    if (raw == 'track' || raw == 'album') return raw;
+    return 'off';
+  }
+
+  Future<void> setLoudnessMode(String mode) {
+    final raw = mode.toLowerCase();
+    final stored = (raw == 'track' || raw == 'album') ? raw : 'off';
+    return _sp.setString('lw_loudness_mode', stored);
+  }
+
+  /// Headphone correction id. `off` or a built-in profile id.
+  String get headphoneProfile =>
+      _sp.getString('lw_headphone_profile') ?? 'off';
+
+  Future<void> setHeadphoneProfile(String id) =>
+      _sp.setString('lw_headphone_profile', id.trim());
+
+  // -- Timed AutoMix (not beat-matched). Mutually exclusive with crossfade.
+  bool get autoMixEnabled => _sp.getBool('lw_automix_enabled') ?? false;
+
+  int get autoMixSeconds {
+    // 12–18 s. Older builds allowed up to 30 s, which ate the end of
+    // short songs; stored values above 18 are read as 18.
+    final v = _sp.getInt('lw_automix_seconds') ?? 14;
+    return v.clamp(12, 18);
+  }
+
+  bool get autoMixSpectral => _sp.getBool('lw_automix_spectral') ?? true;
+
+  Future<void> setAutoMixEnabled(bool enabled) async {
+    await _sp.setBool('lw_automix_enabled', enabled);
+    if (enabled) {
+      await _sp.setBool('lw_crossfade_enabled', false);
+    }
+  }
+
+  Future<void> setAutoMixSeconds(int seconds) =>
+      _sp.setInt('lw_automix_seconds', seconds.clamp(12, 18));
+
+  Future<void> setAutoMixSpectral(bool enabled) =>
+      _sp.setBool('lw_automix_spectral', enabled);
 
   bool get downloadLyrics => _sp.getBool('lw_download_lyrics') ?? true;
   Future<void> setDownloadLyrics(bool v) =>
@@ -180,14 +230,113 @@ class Prefs {
   Future<void> setLyricsAnimation(String v) =>
       _sp.setString('lw_lyrics_animation', v);
 
+  /// Multiplier on the lyrics type size. Snapped to the steps the
+  /// lyrics view and Settings both offer.
+  static const lyricsTextScales = <(double, String)>[
+    (0.85, 'Small'),
+    (1.0, 'Medium'),
+    (1.2, 'Large'),
+    (1.4, 'Extra large'),
+    (1.6, 'Huge'),
+  ];
+
+  double get lyricsTextScale => _nearestDouble(
+        _sp.getDouble('lw_lyrics_text_scale') ?? 1.0,
+        [for (final step in lyricsTextScales) step.$1],
+      );
+
+  Future<void> setLyricsTextScale(double v) => _sp.setDouble(
+        'lw_lyrics_text_scale',
+        _nearestDouble(v, [for (final step in lyricsTextScales) step.$1]),
+      );
+
+  /// `off` or a short language code. Lyric sources in this app do not
+  /// return a translation; the choice is stored for the lyrics view.
+  static const lyricsTranslationOptions = <String, String>{
+    'off': 'Off',
+    'en': 'English',
+    'es': 'Spanish',
+    'fr': 'French',
+    'de': 'German',
+    'pt': 'Portuguese',
+    'hi': 'Hindi',
+    'ja': 'Japanese',
+    'ko': 'Korean',
+  };
+
+  String get lyricsTranslationLang {
+    final v = _sp.getString('lw_lyrics_translation') ?? 'off';
+    return lyricsTranslationOptions.containsKey(v) ? v : 'off';
+  }
+
+  Future<void> setLyricsTranslationLang(String v) => _sp.setString(
+        'lw_lyrics_translation',
+        lyricsTranslationOptions.containsKey(v) ? v : 'off',
+      );
+
+  /// `0` keeps the lyrics toolbar visible. Otherwise idle seconds
+  /// before it fades (2–10).
+  static const lyricsAutoHideOptions = <int, String>{
+    0: 'Always on',
+    2: '2 seconds',
+    4: '4 seconds',
+    6: '6 seconds',
+    8: '8 seconds',
+    10: '10 seconds',
+  };
+
+  int get lyricsAutoHideSeconds {
+    final v = _sp.getInt('lw_lyrics_autohide_seconds') ?? 0;
+    if (v <= 0) return 0;
+    return _nearestInt(v, const [2, 4, 6, 8, 10]);
+  }
+
+  Future<void> setLyricsAutoHideSeconds(int seconds) {
+    final v = seconds <= 0 ? 0 : _nearestInt(seconds, const [2, 4, 6, 8, 10]);
+    return _sp.setInt('lw_lyrics_autohide_seconds', v);
+  }
+
+  static double _nearestDouble(double value, Iterable<double> steps) {
+    var best = steps.first;
+    var bestDist = double.infinity;
+    for (final step in steps) {
+      final dist = (step - value).abs();
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = step;
+      }
+    }
+    return best;
+  }
+
+  static int _nearestInt(int value, List<int> steps) {
+    var best = steps.first;
+    var bestDist = 1 << 30;
+    for (final step in steps) {
+      final dist = (step - value).abs();
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = step;
+      }
+    }
+    return best;
+  }
+
   // -- Appearance ------------------------------------------------------------
   bool get amoled => _sp.getBool('lw_amoled') ?? false;
   Future<void> setAmoled(bool v) => _sp.setBool('lw_amoled', v);
 
-  /// 'dark' (midnight observatory) or 'light' (pearl white).
+  /// 'dark' (midnight observatory), 'light' (pearl white) or 'custom'
+  /// (surfaces generated from [customThemeBase]).
   String get themeMode => _sp.getString('lw_theme_mode') ?? 'dark';
   Future<void> setThemeMode(String v) => _sp.setString('lw_theme_mode', v);
   bool get isLight => themeMode == 'light';
+  bool get isCustomTheme => themeMode == 'custom';
+
+  /// Base colour (ARGB) of the Custom theme. Default: the Ocean preset.
+  int get customThemeBase => _sp.getInt('lw_custom_theme_base') ?? 0xFF1A2A44;
+  Future<void> setCustomThemeBase(int v) =>
+      _sp.setInt('lw_custom_theme_base', v);
 
   String get accentMode => _sp.getString('lw_accent_mode') ?? 'manual';
   Future<void> setAccentMode(String v) => _sp.setString('lw_accent_mode', v);
@@ -263,7 +412,13 @@ class Prefs {
   // -- YouTube Music --------------------------------------------------------
   /// Push played tracks into the account's YT Music watch history.
   /// Default off: writing to the Google account is opt-in.
-  bool get syncYtHistory => _sp.getBool('lw_sync_yt_history') ?? false;
+  bool get syncYtHistory => _sp.getBool('lw_sync_yt_history') ?? true;
+
+  /// Two-way YouTube Music sync of Liked Songs and playlists.
+  bool get syncYtLibrary => _sp.getBool('lw_sync_yt_library') ?? true;
+
+  Future<void> setSyncYtLibrary(bool v) =>
+      _sp.setBool('lw_sync_yt_library', v);
 
   Future<void> setSyncYtHistory(bool v) =>
       _sp.setBool('lw_sync_yt_history', v);
@@ -277,16 +432,6 @@ class Prefs {
 
   Future<void> setDisablePoToken(bool v) =>
       _sp.setBool('lw_disable_potoken', v);
-
-  // -- Global Live Map Telemetry ----------------------------------------------
-  /// Broadcast anonymous listening ticks to the LastWave Live Global Map
-  /// (telemetry.clashprojects.qd.je).
-  /// Matches mobile key `lw_live_telemetry_enabled`, default on (true).
-  bool get liveTelemetryEnabled =>
-      _sp.getBool('lw_live_telemetry_enabled') ?? true;
-
-  Future<void> setLiveTelemetryEnabled(bool v) =>
-      _sp.setBool('lw_live_telemetry_enabled', v);
 
   // -- Desktop-app Parity (Karaoke Lyrics & Visualizer & CD Mode) ------------
   int getLyricsOffset(String trackKey) =>
@@ -308,6 +453,13 @@ class Prefs {
 
   Future<void> setVisualizerEnabled(bool v) =>
       _sp.setBool('lw_visualizer_enabled', v);
+
+  /// Now Playing ambient style: 'apple' (vivid artwork colours, always on
+  /// a dark stage with white text, the same in every theme) or 'winui'
+  /// (the calm tonal stage that follows the app theme).
+  String get ambientStyle => _sp.getString('lw_ambient_style') ?? 'apple';
+  Future<void> setAmbientStyle(String v) =>
+      _sp.setString('lw_ambient_style', v);
 
   bool get cdMode => _sp.getBool('lw_cd_mode') ?? false;
 
@@ -383,6 +535,120 @@ class Prefs {
 
   Future<void> clearIgnoredUpdateVersion() =>
       _sp.remove('lw_ignored_update_version');
+
+  /// YouTube Music podcast shelves. Off hides them without deleting resume
+  /// positions.
+  bool get podcastsEnabled => _sp.getBool('lw_podcasts_enabled') ?? true;
+  Future<void> setPodcastsEnabled(bool v) =>
+      _sp.setBool('lw_podcasts_enabled', v);
+
+  // -- Language (Android AppLanguage.SYNC_KEY) ------------------------------
+  /// BCP-47 tag or `system`. See [AppLanguage] in lib/l10n.
+  String get appLanguageTag => _sp.getString('app_language_tag') ?? 'system';
+  Future<void> setAppLanguageTag(String tag) =>
+      _sp.setString('app_language_tag', tag.trim());
+
+  // -- Jam --------------------------------------------------------------------
+  String get jamServerUrl {
+    final raw = _sp.getString('jamServerUrl')?.trim() ?? '';
+    if (raw.isEmpty) return 'wss://jam.clashprojects.qd.je/ws';
+    return raw;
+  }
+
+  Future<void> setJamServerUrl(String url) =>
+      _sp.setString('jamServerUrl', url.trim());
+
+  String get jamDisplayName => _sp.getString('lw_jam_display_name') ?? '';
+  Future<void> setJamDisplayName(String name) =>
+      _sp.setString('lw_jam_display_name', name.trim());
+
+  // -- Spotify canvas (cookie itself lives in secure storage) ---------------
+  bool get spotifyCanvasEnabled =>
+      _sp.getBool('spotify_canvas_enabled') ?? true;
+  Future<void> setSpotifyCanvasEnabled(bool v) =>
+      _sp.setBool('spotify_canvas_enabled', v);
+
+  /// Per-install id presented to Spotify's client-token endpoint.
+  String get spotifyDeviceId => _sp.getString('spotify_device_id') ?? '';
+  Future<void> setSpotifyDeviceId(String v) =>
+      _sp.setString('spotify_device_id', v);
+
+  // -- Download folder layout (Android DownloadFolderStructure ids) ---------
+  String get downloadStructure {
+    final raw = _sp.getString('lw_download_structure') ?? 'flat';
+    const known = {
+      'flat',
+      'artist_album',
+      'artist_year_album',
+      'album_only',
+      'year_album',
+    };
+    return known.contains(raw) ? raw : 'flat';
+  }
+
+  Future<void> setDownloadStructure(String id) =>
+      _sp.setString('lw_download_structure', id);
+
+  // -- Portable backup (non-secret prefs only) ------------------------------
+  static bool isSecretPref(String key) {
+    final k = key.toLowerCase();
+    const exact = {
+      'lw_sessionkey',
+      'lw_lastfm_api_key',
+      'lw_lastfm_api_secret',
+      'lw_apikey',
+      'lw_apisecret',
+      'lw_addon_url',
+      'lw_addon_urls',
+      'ytm_cookies',
+      'spotify_sp_dc',
+      'spotify_personal_token',
+      'spotify_client_token',
+      'spotify_personal_token_expires',
+      'spotify_client_token_expires',
+    };
+    if (exact.contains(k)) return true;
+    if (k.contains('cookie')) return true;
+    if (k.contains('secret')) return true;
+    if (k.contains('sp_dc')) return true;
+    if (k.contains('sessionkey')) return true;
+    return false;
+  }
+
+  /// Settings that only make sense on the machine they were set on (a
+  /// folder path, an audio device id, the signed-in name).
+  static bool isDeviceBoundPref(String key) => const {
+        'lw_download_dir',
+        'lw_audio_device_id',
+        'lw_username',
+      }.contains(key.toLowerCase());
+
+  static bool _isPortable(String key) =>
+      !isSecretPref(key) && !isDeviceBoundPref(key);
+
+  Set<String> get portablePrefKeys =>
+      _sp.getKeys().where(_isPortable).toSet();
+
+  Object? portablePref(String key) =>
+      _isPortable(key) ? _sp.get(key) : null;
+
+  Future<void> setPortablePref(String key, Object value) async {
+    if (!_isPortable(key)) return;
+    if (value is bool) {
+      await _sp.setBool(key, value);
+    } else if (value is int) {
+      await _sp.setInt(key, value);
+    } else if (value is double) {
+      await _sp.setDouble(key, value);
+    } else if (value is String) {
+      await _sp.setString(key, value);
+    } else if (value is List) {
+      await _sp.setStringList(
+        key,
+        value.map((e) => e.toString()).toList(),
+      );
+    }
+  }
 }
 
 final prefsProvider = Provider<Prefs>((_) {

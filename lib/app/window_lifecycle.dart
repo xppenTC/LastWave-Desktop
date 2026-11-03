@@ -124,6 +124,9 @@ class _WindowLifecycleState extends ConsumerState<WindowLifecycle>
       ref.read(animatedArtworkSessionProvider).setBackgrounded(!visible);
     } catch (_) {}
     try {
+      ref.read(canvasPanelSessionProvider).setBackgrounded(!visible);
+    } catch (_) {}
+    try {
       // Back the connectivity probe cadence off while minimized /
       // tray-hidden (and re-probe immediately on restore). Playback is
       // unaffected — stream failures are handled by mpv, not this flag.
@@ -139,6 +142,22 @@ class _WindowLifecycleState extends ConsumerState<WindowLifecycle>
 
   @override
   void onWindowMaximize() => _setWindowVisible(true);
+
+  /// A window that takes focus is on screen. Only repairs a stale
+  /// "hidden" flag — e.g. Linux MPRIS `Raise` shows the window from the
+  /// tray without passing through [_setWindowVisible], which left the
+  /// karaoke tickers and motion art muted until the next minimize/restore.
+  /// Blur stays ignored (unfocused-but-visible keeps everything live).
+  @override
+  void onWindowFocus() {
+    bool hidden;
+    try {
+      hidden = !ref.read(windowVisibleProvider);
+    } catch (_) {
+      return;
+    }
+    if (hidden) _setWindowVisible(true);
+  }
 
   @override
   void onTrayMenuItemClick(MenuItem menuItem) {

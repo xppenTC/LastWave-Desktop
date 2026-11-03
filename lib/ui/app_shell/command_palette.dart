@@ -1,5 +1,6 @@
 import '../components/buttons.dart';
 import '../components/inputs.dart';
+import '../components/menus.dart';
 import 'dart:async';
 
 import 'package:fluent_ui/fluent_ui.dart';
@@ -14,6 +15,7 @@ import '../components/artwork.dart';
 import '../navigation/wave_nav.dart';
 import '../search/search_page.dart';
 import '../theme/tokens.dart';
+import '../theme/wave_icons.dart';
 
 /// Keyboard-first command palette (Ctrl+K).
 ///
@@ -30,17 +32,17 @@ Future<void> showWaveCommandPalette(
 }) {
   final controller = TextEditingController();
   final routes = <(String path, String label, IconData icon)>[
-    (('/home'), 'Go to Home', FluentIcons.home),
-    (('/search'), 'Go to Search', FluentIcons.search),
-    (('/liked'), 'Go to Liked Songs', FluentIcons.heart),
+    (('/home'), 'Go to Home', WaveIcons.home),
+    (('/search'), 'Go to Search', WaveIcons.search),
+    (('/liked'), 'Go to Liked Songs', WaveIcons.liked),
     (('/albums'), 'Go to Albums', FluentIcons.music_note),
     (('/artists'), 'Go to Artists', FluentIcons.contact),
-    (('/playlists'), 'Go to Playlists', FluentIcons.list_mirrored),
+    (('/playlists'), 'Go to Playlists', WaveIcons.playlists),
+    (('/podcasts'), 'Go to Podcasts', FluentIcons.headset),
     (('/mixes'), 'Open Mix Lab', FluentIcons.lightbulb),
     (('/downloads'), 'Go to Downloads', FluentIcons.download),
-    (('/history'), 'Go to History', FluentIcons.history),
+    (('/history'), 'Go to History', WaveIcons.history),
     (('/now'), 'Open Now Playing', FluentIcons.circle_fill),
-    (('/lyrics'), 'Open Lyrics', FluentIcons.microphone),
     (('/settings'), 'Open Settings', FluentIcons.settings),
   ];
   return showDialog(
@@ -64,6 +66,9 @@ class _PaletteEntry {
   final String art;
   final bool circleArt;
   final VoidCallback action;
+
+  /// Right-click menu (songs only); null = no context menu.
+  final List<WaveMenuEntry> Function()? menu;
   const _PaletteEntry({
     required this.label,
     required this.sub,
@@ -72,6 +77,7 @@ class _PaletteEntry {
     required this.action,
     this.art = '',
     this.circleArt = false,
+    this.menu,
   });
 }
 
@@ -102,6 +108,10 @@ class _PaletteDialogState extends ConsumerState<_PaletteDialog> {
   @override
   void dispose() {
     _debounce?.cancel();
+    // showWaveCommandPalette creates this controller for the dialog alone
+    // and never disposed it. Children unmount first, so the TextBox has
+    // already detached its listeners by the time this runs.
+    widget.controller.dispose();
     super.dispose();
   }
 
@@ -155,7 +165,7 @@ class _PaletteDialogState extends ConsumerState<_PaletteDialog> {
         label: 'Search for “${_q.trim()}”',
         sub: 'Search',
         group: 'Search',
-        icon: FluentIcons.search,
+        icon: WaveIcons.search,
         action: () => widget.onSearch(_q.trim()),
       ));
     }
@@ -184,6 +194,7 @@ class _PaletteDialogState extends ConsumerState<_PaletteDialog> {
           art: top.artworkUrl,
           circleArt: top.tab == SearchTab.artists,
           action: () => _openResult(top),
+          menu: top.tab == SearchTab.tracks ? () => _songMenu(top) : null,
         ));
       }
       for (final s in songs.take(3)) {
@@ -194,6 +205,7 @@ class _PaletteDialogState extends ConsumerState<_PaletteDialog> {
           icon: FluentIcons.music_note,
           art: s.artworkUrl,
           action: () => _playSong(s),
+          menu: () => _songMenu(s),
         ));
       }
       for (final a in albums.take(2)) {
@@ -201,7 +213,7 @@ class _PaletteDialogState extends ConsumerState<_PaletteDialog> {
           label: a.name,
           sub: a.artist.isNotEmpty ? a.artist : 'Album',
           group: 'Albums',
-          icon: FluentIcons.album,
+          icon: WaveIcons.albums,
           art: a.artworkUrl,
           action: () {
             if (a.entityId.isNotEmpty) {
@@ -246,13 +258,24 @@ class _PaletteDialogState extends ConsumerState<_PaletteDialog> {
           label: 'Search “$h”',
           sub: 'Recent',
           group: 'Recent',
-          icon: FluentIcons.history,
+          icon: WaveIcons.history,
           action: () => widget.onSearch(h),
         ));
       }
     }
     return out;
   }
+
+  List<WaveMenuEntry> _songMenu(SearchResultItem s) => waveTrackMenuItems(
+        context: context,
+        ref: ref,
+        title: s.name,
+        artist: s.artist,
+        artworkUrl: s.artworkUrl,
+        videoId: s.videoId,
+        album: s.subtitle,
+        durationSeconds: s.durationSeconds,
+      );
 
   void _playSong(SearchResultItem s) {
     // Single track through the shared helper: autoplay-similar pref
@@ -331,9 +354,7 @@ class _PaletteDialogState extends ConsumerState<_PaletteDialog> {
         constraints: const BoxConstraints(maxWidth: 440),
         style: ContentDialogThemeData(
           decoration: BoxDecoration(
-            color: dark
-                ? WaveColors.surfaceRaised
-                : WaveColors.lightSurfaceRaised,
+            color: waveSurfaceRaised(context),
             borderRadius:
                 const BorderRadius.all(Radius.circular(WaveRadius.floating)),
             border: Border.all(
@@ -364,7 +385,7 @@ class _PaletteDialogState extends ConsumerState<_PaletteDialog> {
                 placeholder: 'Type a command or search…',
                 prefix: const Padding(
                   padding: EdgeInsets.only(left: 8),
-                  child: Icon(FluentIcons.search, size: 15),
+                  child: Icon(WaveIcons.search, size: 15),
                 ),
                 onChanged: _onChanged,
                 onSubmitted: (_) => _activate(results),
@@ -480,7 +501,7 @@ class _PaletteRow extends StatelessWidget {
                 label: r.label,
               ))
         : Icon(r.icon, size: 15);
-    return ListTile.selectable(
+    final tile = ListTile.selectable(
       shape: RoundedRectangleBorder(
         borderRadius: WaveRadius.controlsRadius,
       ),
@@ -499,6 +520,8 @@ class _PaletteRow extends StatelessWidget {
       ),
       onPressed: onTap,
     );
+    final menu = r.menu;
+    return menu == null ? tile : WaveContextMenu(items: menu, child: tile);
   }
 }
 

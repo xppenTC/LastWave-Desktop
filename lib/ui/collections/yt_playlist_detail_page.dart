@@ -8,6 +8,7 @@ import '../../features/downloads/download_manager.dart';
 import '../../features/feed/feed_repository.dart';
 import '../../features/innertube/innertube_api.dart';
 import '../../features/innertube/yt_library_providers.dart';
+import '../../features/library/playlists.dart';
 import '../../features/player/playback_service.dart';
 import '../components/buttons.dart'
     show LWTooltip, WaveGhostButton, WavePrimaryButton;
@@ -69,7 +70,7 @@ class _WaveYtPlaylistDetailPageState
       data: (res) {
         if (res == null || res.tracks.isEmpty) {
           return WaveEmpty(
-            icon: FluentIcons.list_mirrored,
+            icon: WaveIcons.playlists,
             title: 'Playlist unavailable',
             subtitle:
                 'It may be private, deleted, or offline.',
@@ -186,7 +187,7 @@ class _Body extends ConsumerWidget {
                             '${res.tracks.length} tracks${query.isNotEmpty ? ' · ${tracks.length} match' : ''}',
                         artworkUrl: cover,
                         fallbackIcon:
-                            FluentIcons.list_mirrored,
+                            WaveIcons.playlists,
                         primaryActions: [
                           if (tracks.isNotEmpty) ...[
                             WavePrimaryButton(
@@ -215,6 +216,31 @@ class _Body extends ConsumerWidget {
                                   sourceLabel: heroTitle,
                                   queueAll: shuffled,
                                 );
+                              },
+                            ),
+                            WaveGhostButton(
+                              label: 'Save to library',
+                              icon: FluentIcons.save,
+                              onPressed: () async {
+                                final saved = await ref
+                                    .read(playlistRepositoryProvider.notifier)
+                                    .saveGenerated(
+                                  heroTitle.isEmpty ? 'YouTube playlist' : heroTitle,
+                                  [
+                                    for (final t in res.tracks)
+                                      StoredTrack(
+                                        name: t.title,
+                                        artist: t.artist,
+                                        album: t.album,
+                                        artworkUrl: t.artworkUrl,
+                                        videoId: t.videoId,
+                                        durationSeconds: t.durationSeconds,
+                                      ),
+                                  ],
+                                );
+                                if (context.mounted) {
+                                  context.go('/playlists/${saved.id}');
+                                }
                               },
                             ),
                             WaveGhostButton(
@@ -272,7 +298,7 @@ class _Body extends ConsumerWidget {
           if (tracks.isEmpty)
             const SliverToBoxAdapter(
               child: WaveEmpty(
-                icon: FluentIcons.list_mirrored,
+                icon: WaveIcons.playlists,
                 title: 'No matches',
                 subtitle: 'Try a different filter.',
               ),

@@ -11,6 +11,7 @@ import '../components/states.dart';
 import '../navigation/wave_nav.dart';
 import '../theme/motion.dart';
 import '../theme/tokens.dart';
+import '../theme/wave_icons.dart';
 
 final _waveArtistsProvider = FutureProvider<
     List<({String name, String artwork})>>((ref) async {
@@ -181,7 +182,7 @@ class _ArtistCellState extends State<_ArtistCell> {
               context, '/artist/${Uri.encodeComponent(widget.name)}'),
         ),
         WaveMenuAction(
-          leading: const Icon(FluentIcons.search, size: 13),
+          leading: const Icon(WaveIcons.search, size: 13),
           label: 'Search for artist',
           onPressed: () => context.go(
               '/search?q=${Uri.encodeComponent(widget.name)}'),
@@ -245,15 +246,12 @@ class _ArtistCellState extends State<_ArtistCell> {
                               horizontal: 7, vertical: 2),
                       decoration: BoxDecoration(
                         color: dark
-                            ? WaveColors.surfaceRaised
-                            : WaveColors.lightSurface,
+                            ? waveSurfaceRaised(context)
+                            : waveSurface(context),
                         borderRadius:
                             BorderRadius.circular(999),
                         border: Border.all(
-                            color: dark
-                                ? WaveColors.outline
-                                : WaveColors
-                                    .lightOutline),
+                            color: waveOutline(context)),
                       ),
                       child: Text('${widget.rank}',
                           style: WaveType.meta.copyWith(
