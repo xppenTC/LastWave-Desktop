@@ -5,6 +5,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dio/dio.dart' show DioException;
 import 'package:file_picker/file_picker.dart';
 import 'package:fluent_ui/fluent_ui.dart';
 import 'package:flutter/foundation.dart';
@@ -2949,21 +2950,32 @@ class _Sources extends ConsumerWidget {
       }
       return;
     }
-    AddonManifest? manifest;
+    // Saved even when the manifest fails, like the phone app: a worker over
+    // its quota answers 429 for a while and works again later.
+    String? failure;
     try {
-      manifest = await AddonApi([parsed.root]).manifestFor(parsed.root);
-    } catch (_) {
-      manifest = null;
+      await AddonApi([parsed.root]).manifestFor(parsed.root);
+    } on DioException catch (e) {
+      failure = e.response != null
+          ? 'HTTP ${e.response!.statusCode}'
+          : (e.message ?? e.type.name);
+    } catch (e) {
+      failure = '$e';
     }
-    if (!context.mounted) return;
-    if (manifest == null) {
+    final root = parsed.root;
+    final next = [...urls.where((e) => e != root), root];
+    await onUpdate((p) => p.setAddonUrls(next));
+    ref.invalidate(losslessApiProvider);
+    ref.invalidate(addonManifestProvider);
+    if (failure != null && context.mounted) {
       await showDialog(
         context: context,
         builder: (dialogContext) => ContentDialog(
-          title: const Text('Addon unreachable'),
-          content: const Text(
-            'No usable addon answered there — revoked, offline, '
-            'or wrong URL. Nothing was saved.',
+          title: const Text('Addon saved, but not answering'),
+          content: Text(
+            'The manifest check failed ($failure). The addon was saved '
+            'anyway; it is used as soon as it answers. Remove it if the '
+            'URL is wrong.',
           ),
           actions: [
             WaveFilledButton(
@@ -2973,13 +2985,7 @@ class _Sources extends ConsumerWidget {
           ],
         ),
       );
-      return;
     }
-    final root = parsed.root;
-    final next = [...urls.where((e) => e != root), root];
-    await onUpdate((p) => p.setAddonUrls(next));
-    ref.invalidate(losslessApiProvider);
-    ref.invalidate(addonManifestProvider);
   }
 }
 

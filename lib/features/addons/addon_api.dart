@@ -104,8 +104,9 @@ class AddonApi implements LosslessSource {
       return (root: '${m.group(1)}/a/$token/', token: token);
     }
 
-    // Malformed /a/ paths without a valid token are rejected.
-    if (RegExp(r'^(https?://[^/?#]+)/a(/.*)?$').hasMatch(v)) {
+    // Malformed /a/<token> paths are rejected; a bare /a/ is a standalone
+    // addon root (https://soundfean-musics.onrender.com/a/).
+    if (RegExp(r'^(https?://[^/?#]+)/a/.').hasMatch(v)) {
       return null;
     }
 

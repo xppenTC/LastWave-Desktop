@@ -58,6 +58,13 @@ void main() {
       expect(p4?.token, '');
     });
 
+    test('bare /a/ is a standalone root', () {
+      final p = AddonApi.parseAddonUrl(
+          'https://soundfean-musics.onrender.com/a/manifest.json');
+      expect(p?.root, 'https://soundfean-musics.onrender.com/a/');
+      expect(p?.token, '');
+    });
+
     test('short/non-hex tokens rejected', () {
       expect(
           AddonApi.parseAddonUrl(
