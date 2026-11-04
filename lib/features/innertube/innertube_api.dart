@@ -11,7 +11,6 @@ import 'package:unorm_dart/unorm_dart.dart' as unorm;
 
 import '../../core/audio/stream_models.dart';
 import '../../core/diagnostics/diagnostics_log.dart';
-import '../../core/diagnostics/memory_probe.dart';
 import '../../core/matching/match_vocab.dart';
 import '../../core/network/dio_factory.dart';
 import '../../core/network/lastfm_crypto.dart';
@@ -773,7 +772,6 @@ class InnerTubeMusicApi {
 
   InnerTubeMusicApi(this._dio, this._secure, [this._poTokens]) {
     _decipher = SignatureDecipher(_dio);
-    MemoryProbe.register('yt', () => debugGauge);
     // Google rotates the session cookies (`__Secure-*PSIDTS`, `SIDCC`
     // family) through `Set-Cookie` on authenticated responses. Without
     // absorbing them the stored jar slowly falls behind the live
@@ -793,16 +791,6 @@ class InnerTubeMusicApi {
       ),
     );
   }
-
-  /// Long-lived InnerTube memo residency. Every one of these is capped
-  /// ([_maxStreamCacheEntries], [_maxMatchCacheEntries],
-  /// [_maxLastResolvedEntries], [_maxCooldowns]); this gauge is here to
-  /// prove the caps hold over a long listening session rather than to
-  /// find a leak.
-  String get debugGauge =>
-      'stream=${_streamCache.length} '
-      'inflight=${_inflight.length} match=${_matchCache.length} '
-      'resolved=${_lastResolved.length} cooled=${_failedClientsUntil.length}';
 
   /// Attach the persistent disk cache (call once from the provider).
   /// Loads up to 256 recent stream entries + prunes expired rows.
@@ -3130,7 +3118,39 @@ class InnerTubeMusicApi {
       authenticated: true,
     );
     final result = await _collectBrowseSongPages(root, limit);
+    if (result.tracks.isEmpty && browseId == 'FEmusic_charts') {
+      return _chartPlaylistTracks(root, limit);
+    }
     return result.tracks;
+  }
+
+  /// Signed-out `FEmusic_charts` has no song rows at all — only top
+  /// artists and carousels of chart *playlists* (the lone
+  /// musicShelfRenderer is the country picker). So the songs come from
+  /// the first chart playlist that yields any, which is what keeps a
+  /// fresh guest's Home from being empty.
+  Future<List<YouTubeMusicTrack>> _chartPlaylistTracks(
+    Map<String, dynamic> root,
+    int? limit,
+  ) async {
+    final items = <Map<String, dynamic>>[];
+    _collectObjects(root, 'musicTwoRowItemRenderer', items);
+    final ids = <String>[];
+    for (final item in items) {
+      final id = ((item['navigationEndpoint'] as Map?)?['browseEndpoint']
+              as Map?)?['browseId']
+          ?.toString();
+      if (id != null && id.startsWith('VL') && !ids.contains(id)) {
+        ids.add(id);
+      }
+    }
+    for (final id in ids.take(3)) {
+      try {
+        final tracks = await browseSongs(id, limit: limit);
+        if (tracks.isNotEmpty) return tracks;
+      } catch (_) {}
+    }
+    return const [];
   }
 
   /// Browse an album page: header metadata (title/artist/artwork/year)

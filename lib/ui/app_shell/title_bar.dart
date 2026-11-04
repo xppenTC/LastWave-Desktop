@@ -1,23 +1,29 @@
+import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:fluent_ui/fluent_ui.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../../app/track_actions.dart' show playGenerated;
+import '../../features/feed/feed_repository.dart' show GeneratedTrack;
 import '../../features/lastfm/auth_repository.dart';
 import '../../features/lastfm/home_repository.dart';
 import '../../features/search/search_repository.dart';
-import '../components/buttons.dart' show LWTooltip;
+import '../components/artwork.dart';
+import '../../app/accessibility.dart';
+import '../components/buttons.dart' show LWTooltip, WaveA11yButton;
 import '../components/inputs.dart';
 import '../components/menus.dart'
     show
-        fastFlyoutTransition,
-        WaveFlyoutPanel,
         WaveMenuAction,
         WaveMenuButton,
         WaveMenuSeparator;
+import '../navigation/wave_nav.dart';
+import '../search/search_page.dart';
 import '../theme/haze.dart';
 import '../theme/tokens.dart';
 import '../theme/brand_icons.dart';
@@ -32,6 +38,7 @@ class WaveTitleBar extends ConsumerWidget {
   final TextEditingController searchController;
   final FocusNode searchFocus;
   final ValueChanged<String> onSearchSubmit;
+  final ValueChanged<String> onGo;
   final VoidCallback onPalette;
   final VoidCallback onToggleRail;
   final bool canGoBack;
@@ -43,6 +50,7 @@ class WaveTitleBar extends ConsumerWidget {
     required this.searchController,
     required this.searchFocus,
     required this.onSearchSubmit,
+    required this.onGo,
     required this.onPalette,
     required this.onToggleRail,
     required this.canGoBack,
@@ -101,6 +109,7 @@ class WaveTitleBar extends ConsumerWidget {
                     controller: searchController,
                     focus: searchFocus,
                     onSubmit: onSearchSubmit,
+                    onGo: onGo,
                     onPalette: onPalette,
                   ),
                 ),
@@ -136,7 +145,19 @@ class WaveTitleBar extends ConsumerWidget {
                 const _CommunityBtns(),
                 const SizedBox(width: 6),
                 // Profile / account — tiny, no giant buttons.
-                MouseRegion(
+                WaveA11yButton(
+                  label: auth.status == AuthStatus.signedIn
+                      ? 'Profile, ${auth.username}'
+                      : 'Connect Last.fm',
+                  onTap: () {
+                    ref.read(viewingProfileProvider.notifier).clear();
+                    context.go(
+                      auth.status == AuthStatus.signedIn
+                          ? '/profile'
+                          : '/welcome',
+                    );
+                  },
+                  child: MouseRegion(
                   cursor: SystemMouseCursors.click,
                   child: GestureDetector(
                   onTap: () {
@@ -177,7 +198,7 @@ class WaveTitleBar extends ConsumerWidget {
                       ),
                     ),
                   ),
-                )),
+                ))),
                 const SizedBox(width: 6),
                 _AppMenu(),
                 const SizedBox(width: 6),
@@ -194,15 +215,38 @@ class WaveTitleBar extends ConsumerWidget {
   }
 }
 
+/// One row of the search dropdown under the title-bar input.
+class _Hit {
+  final String label;
+  final String sub;
+  final IconData icon;
+  final String art;
+  final bool circleArt;
+  final VoidCallback onSelect;
+  const _Hit({
+    required this.label,
+    required this.sub,
+    required this.icon,
+    required this.onSelect,
+    this.art = '',
+    this.circleArt = false,
+  });
+}
+
+/// Most results the dropdown ever shows; "See all results" is extra.
+const _maxHits = 4;
+
 class _WaveSearchBox extends ConsumerStatefulWidget {
   final TextEditingController controller;
   final FocusNode focus;
   final ValueChanged<String> onSubmit;
+  final ValueChanged<String> onGo;
   final VoidCallback onPalette;
   const _WaveSearchBox({
     required this.controller,
     required this.focus,
     required this.onSubmit,
+    required this.onGo,
     required this.onPalette,
   });
   @override
@@ -210,9 +254,15 @@ class _WaveSearchBox extends ConsumerStatefulWidget {
 }
 
 class _WaveSearchBoxState extends ConsumerState<_WaveSearchBox> {
-  final _flyout = FlyoutController();
-  bool _isOpen = false;
-  bool _suppressFocusFlyout = false;
+  final _portal = OverlayPortalController();
+  final _link = LayerLink();
+  final _panelKey = GlobalKey();
+  Timer? _debounce;
+  String _liveQ = '';
+  int _selected = -1;
+  // Rows for the current frame; built in build() (the only place providers
+  // may be watched) and read by the overlay and key handlers.
+  List<_Hit> _shown = const [];
 
   @override
   void initState() {
@@ -222,181 +272,392 @@ class _WaveSearchBoxState extends ConsumerState<_WaveSearchBox> {
 
   @override
   void dispose() {
+    _debounce?.cancel();
     widget.focus.removeListener(_onFocus);
-    _flyout.dispose();
     super.dispose();
   }
 
   void _onFocus() {
+    if (!mounted) return;
     if (widget.focus.hasFocus) {
-      if (_suppressFocusFlyout) {
-        _suppressFocusFlyout = false;
-        return;
-      }
-      _showRecents();
+      _selected = -1;
+      _portal.show();
     } else {
-      _suppressFocusFlyout = false;
-      _closeFlyout();
+      _portal.hide();
     }
+    setState(() {});
   }
 
-  void _closeFlyout() {
-    if (_isOpen && _flyout.isOpen) {
-      try {
-        _flyout.close();
-      } catch (_) {}
-    }
-    _isOpen = false;
+  void _onChanged(String v) {
+    setState(() => _selected = -1);
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 250), () {
+      if (mounted) setState(() => _liveQ = v.trim());
+    });
   }
 
-  Future<void> _showRecents() async {
-    final history =
-        ref.read(searchRepositoryProvider).history().take(5).toList();
-    if (history.isEmpty) return;
-    if (_isOpen || _flyout.isOpen) return;
-    _isOpen = true;
-
-    try {
-      await _flyout.showFlyout(
-        barrierColor: Colors.transparent,
-        barrierDismissible: true,
-        dismissWithEsc: true,
-        placementMode: FlyoutPlacementMode.bottomCenter,
-        transitionDuration: const Duration(milliseconds: 90),
-        transitionBuilder: fastFlyoutTransition,
-        builder: (context) => WaveFlyoutPanel.items(
-          entries: [
-            for (final h in history)
-              WaveMenuAction(
-                leading:
-                    const Icon(WaveIcons.history, size: 15),
-                label: h,
-                onPressed: () {
-                  widget.controller.text = h;
-                  _closeFlyout();
-                  widget.focus.unfocus();
-                  widget.onSubmit(h);
-                },
+  /// Dropdown rows: recent searches while the field is empty, otherwise
+  /// at most [_maxHits] live results (songs first, one album, one artist)
+  /// followed by "See all results".
+  List<_Hit> _hits() {
+    final typed = widget.controller.text.trim();
+    if (typed.isEmpty) {
+      return [
+        for (final h
+            in ref.read(searchRepositoryProvider).history().take(_maxHits))
+          _Hit(
+            label: h,
+            sub: 'Recent',
+            icon: WaveIcons.history,
+            onSelect: () {
+              widget.controller.text = h;
+              widget.onSubmit(h);
+            },
+          ),
+      ];
+    }
+    final hits = <_Hit>[];
+    if (_liveQ.isNotEmpty) {
+      final songs = ref.watch(waveSearchSongsProvider(_liveQ)).valueOrNull ??
+          const <SearchResultItem>[];
+      final albums =
+          ref.watch(waveSearchAlbumsProvider(_liveQ)).valueOrNull ??
+              const <SearchResultItem>[];
+      final artists =
+          ref.watch(waveSearchArtistsProvider(_liveQ)).valueOrNull ??
+              const <SearchResultItem>[];
+      _Hit song(SearchResultItem s) => _Hit(
+            label: s.name,
+            sub: s.artist.isNotEmpty ? 'Song • ${s.artist}' : 'Song',
+            icon: WaveIcons.music,
+            art: s.artworkUrl,
+            onSelect: () => playGenerated(
+              ref,
+              context,
+              GeneratedTrack(
+                name: s.name,
+                artist: s.artist,
+                album: s.subtitle,
+                artworkUrl: s.artworkUrl,
+                videoId: s.videoId,
               ),
-            const WaveMenuSeparator(),
-            WaveMenuAction(
-              leading: const Icon(WaveIcons.command, size: 15),
-              label: 'All commands  (Ctrl+K)',
-              onPressed: () {
-                _closeFlyout();
-                widget.focus.unfocus();
-                widget.onPalette();
-              },
+              sourceLabel: 'Search',
             ),
-          ],
-        ),
-      );
-    } finally {
-      _isOpen = false;
-    }
-
-    if (mounted) {
-      _suppressFocusFlyout = true;
-      if (widget.focus.hasFocus) {
-        widget.focus.unfocus();
+          );
+      final picked = <_Hit>[
+        for (final s in songs.take(2)) song(s),
+        for (final a in albums.take(1))
+          _Hit(
+            label: a.name,
+            sub: a.artist.isNotEmpty ? 'Album • ${a.artist}' : 'Album',
+            icon: WaveIcons.albums,
+            art: a.artworkUrl,
+            onSelect: () {
+              if (a.entityId.isEmpty) return;
+              widget.onGo(waveAlbumLocation(
+                browseId: a.entityId,
+                title: a.name,
+                artist: a.artist,
+                artworkUrl: a.artworkUrl,
+              ));
+            },
+          ),
+        for (final a in artists.take(1))
+          _Hit(
+            label: a.name,
+            sub: 'Artist',
+            icon: FluentIcons.contact,
+            art: a.artworkUrl,
+            circleArt: true,
+            onSelect: () =>
+                widget.onGo('/artist/${Uri.encodeComponent(a.name)}'),
+          ),
+      ];
+      // Top up with more songs when albums/artists came back short.
+      for (final s in songs.skip(2)) {
+        if (picked.length >= _maxHits) break;
+        picked.add(song(s));
       }
+      hits.addAll(picked.take(_maxHits));
     }
+    hits.add(_Hit(
+      label: 'See all results for “$typed”',
+      sub: 'Open the full Search page',
+      icon: WaveIcons.search,
+      onSelect: () => widget.onSubmit(typed),
+    ));
+    return hits;
+  }
+
+  String _announcedFor = '';
+
+  /// Tells a screen-reader user that suggestions arrived and how to reach
+  /// them: the dropdown is an overlay, so nothing else would announce it.
+  /// Spoken once per settled query, after the live results have loaded.
+  void _announceSuggestions() {
+    if (!widget.focus.hasFocus || _liveQ.isEmpty) return;
+    if (_liveQ != widget.controller.text.trim()) return;
+    final count = _shown.length - 1; // last row is "See all results"
+    final key = '$_liveQ|$count';
+    if (key == _announcedFor || count <= 0) return;
+    _announcedFor = key;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      AppAccessibility.announce(
+        context,
+        '$count suggestion${count == 1 ? '' : 's'}. '
+        'Use up and down arrows to browse, Enter to open.',
+      );
+    });
+  }
+
+  void _activate(_Hit hit) {
+    _portal.hide();
+    widget.focus.unfocus();
+    hit.onSelect();
+  }
+
+  KeyEventResult _onKey(KeyEvent event) {
+    if (event is! KeyDownEvent || !widget.focus.hasFocus) {
+      return KeyEventResult.ignored;
+    }
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.escape) {
+      if (_selected >= 0 || _portal.isShowing) {
+        setState(() => _selected = -1);
+        _portal.hide();
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.ignored;
+    }
+    if (key != LogicalKeyboardKey.arrowDown &&
+        key != LogicalKeyboardKey.arrowUp) {
+      return KeyEventResult.ignored;
+    }
+    final hits = _shown;
+    if (hits.isEmpty) return KeyEventResult.handled;
+    if (!_portal.isShowing) _portal.show();
+    setState(() {
+      _selected = key == LogicalKeyboardKey.arrowDown
+          ? (_selected + 1).clamp(0, hits.length - 1)
+          : (_selected - 1).clamp(-1, hits.length - 1);
+    });
+    // The highlighted row lives in an overlay while keyboard focus stays in
+    // the text field, so a screen reader would never hear it move. Speak it.
+    if (_selected >= 0) {
+      final hit = hits[_selected];
+      AppAccessibility.announce(
+        context,
+        '${hit.label}, ${hit.sub}, ${_selected + 1} of ${hits.length}',
+      );
+    } else {
+      AppAccessibility.announce(context, 'Search field');
+    }
+    return KeyEventResult.handled;
+  }
+
+  void _submit(String v) {
+    final hits = _shown;
+    if (_selected >= 0 && _selected < hits.length) {
+      _activate(hits[_selected]);
+      return;
+    }
+    _portal.hide();
+    widget.focus.unfocus();
+    widget.onSubmit(v);
+  }
+
+  bool _insidePanel(Offset globalPosition) {
+    final box = _panelKey.currentContext?.findRenderObject();
+    if (box is! RenderBox || !box.attached) return false;
+    return (box.localToGlobal(Offset.zero) & box.size)
+        .contains(globalPosition);
+  }
+
+  Widget _panel(BuildContext overlayContext) {
+    final dark = waveIsDark(overlayContext);
+    final hits = _shown;
+    if (hits.isEmpty) return const SizedBox.shrink();
+    final box = context.findRenderObject();
+    final width = box is RenderBox ? box.size.width : 320.0;
+    return CompositedTransformFollower(
+      link: _link,
+      targetAnchor: Alignment.bottomLeft,
+      followerAnchor: Alignment.topLeft,
+      offset: const Offset(0, 6),
+      showWhenUnlinked: false,
+      child: Align(
+        alignment: Alignment.topLeft,
+        child: SizedBox(
+          width: width < 320 ? 320 : width,
+          child: _PanelIn(child: Container(
+            key: _panelKey,
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: dark
+                  ? waveSurfaceRaised(overlayContext)
+                  : waveSurfaceOverlay(overlayContext),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: waveDivider(overlayContext)),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.28),
+                  blurRadius: 24,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (var i = 0; i < hits.length; i++)
+                  ListTile.selectable(
+                    shape: RoundedRectangleBorder(
+                      borderRadius: WaveRadius.controlsRadius,
+                    ),
+                    selected: i == _selected,
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    selectionMode: ListTileSelectionMode.single,
+                    leading: SizedBox(
+                      width: 28,
+                      height: 28,
+                      child: hits[i].art.isNotEmpty
+                          ? (hits[i].circleArt
+                              ? WaveArtwork.circle(
+                                  url: hits[i].art,
+                                  size: 28,
+                                  label: hits[i].label,
+                                )
+                              : WaveArtwork(
+                                  url: hits[i].art,
+                                  size: 28,
+                                  radius: WaveRadius.artwork,
+                                  label: hits[i].label,
+                                ))
+                          : Icon(hits[i].icon, size: 15),
+                    ),
+                    title: Text(
+                      hits[i].label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: Text(
+                      hits[i].sub,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    onPressed: () => _activate(hits[i]),
+                  ),
+              ],
+            ),
+          ),)
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final dark = waveIsDark(context);
-    return FlyoutTarget(
-      controller: _flyout,
-      child: LWTooltip(
-        message: 'Search (Ctrl+F)',
-        child: AnimatedContainer(
-          duration: waveMotion(context, WaveMotion.fast),
-          // Fill the Flexible budget from the parent; focus state only
-          // changes decoration, never width (no layout push).
-          width: double.infinity,
-          height: 30,
-          child: TextBox(
-            decoration: waveInputDecoration(),
-            controller: widget.controller,
-            focusNode: widget.focus,
-            placeholder: 'Search',
-            onTap: () {
-              _suppressFocusFlyout = false;
-              if (!_isOpen) {
-                _showRecents();
-              }
-            },
-            onTapOutside: (_) {
-              _closeFlyout();
-              if (widget.focus.hasFocus) {
-                widget.focus.unfocus();
-              }
-            },
-            prefix: Padding(
-              padding: const EdgeInsets.only(left: 8),
-              child: Icon(
-                WaveIcons.search,
-                size: 15,
-                color: dark
-                    ? WaveColors.textTertiary
-                    : WaveColors.lightTextTertiary,
+    final tertiary =
+        dark ? WaveColors.textTertiary : WaveColors.lightTextTertiary;
+    _shown = _hits();
+    _announceSuggestions();
+    return CompositedTransformTarget(
+      link: _link,
+      child: OverlayPortal(
+        controller: _portal,
+        overlayChildBuilder: _panel,
+        child: LWTooltip(
+          message: 'Search (Ctrl+F)',
+          child: SizedBox(
+            width: double.infinity,
+            height: 30,
+            child: Focus(
+              canRequestFocus: false,
+              skipTraversal: true,
+              onKeyEvent: (_, e) => _onKey(e),
+              child: Semantics(
+                label: 'Search songs, albums and artists',
+                hint: 'Type to see suggestions, Enter to search',
+                textField: true,
+                child: TextBox(
+                decoration: waveInputDecoration(radius: 8),
+                controller: widget.controller,
+                focusNode: widget.focus,
+                placeholder: 'Search',
+                style: WaveType.body.copyWith(fontSize: 13),
+                cursorHeight: 14,
+                onTapOutside: (e) {
+                  if (_insidePanel(e.position)) return;
+                  if (widget.focus.hasFocus) widget.focus.unfocus();
+                },
+                prefix: Padding(
+                  padding: const EdgeInsets.only(left: 8),
+                  child: Icon(WaveIcons.search, size: 15, color: tertiary),
+                ),
+                suffix: widget.controller.text.isNotEmpty
+                    ? Padding(
+                        padding: const EdgeInsets.only(right: 4),
+                        child: MouseRegion(
+                          cursor: SystemMouseCursors.click,
+                          child: IconButton(
+                            icon: const Icon(FluentIcons.chrome_close,
+                                size: 10, semanticLabel: 'Clear search'),
+                            onPressed: () {
+                              widget.controller.clear();
+                              _onChanged('');
+                              widget.focus.requestFocus();
+                            },
+                          ),
+                        ),
+                      )
+                    : widget.focus.hasFocus
+                        ? null
+                        : Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: IgnorePointer(
+                              child: Text(
+                                'Ctrl F',
+                                semanticsLabel: 'Shortcut Control F',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w500,
+                                  letterSpacing: 0.2,
+                                  color: tertiary.withValues(alpha: 0.7),
+                                ),
+                              ),
+                            ),
+                          ),
+                onChanged: _onChanged,
+                onSubmitted: _submit,
+              ),
               ),
             ),
-            suffix: widget.controller.text.isNotEmpty
-                ? Padding(
-                    padding: const EdgeInsets.only(right: 4),
-                    child: MouseRegion(
-                      cursor: SystemMouseCursors.click,
-                      child: IconButton(
-                      icon: const Icon(FluentIcons.chrome_close, size: 10),
-                      onPressed: () {
-                        widget.controller.clear();
-                        setState(() {});
-                      },
-                    )),
-                  )
-                : Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: MouseRegion(
-                      cursor: SystemMouseCursors.click,
-                      child: GestureDetector(
-                      onTap: widget.onPalette,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 5, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: dark
-                              ? waveSurfaceRaised(context)
-                              : waveSurfaceOverlay(context),
-                          borderRadius: WaveRadius.tinyRadius,
-                          border: Border.all(
-                            color: waveDivider(context).withValues(alpha: 0.5),
-                          ),
-                        ),
-                        child: Text(
-                          'Ctrl K',
-                          style: TextStyle(
-                            fontSize: 9.5,
-                            fontWeight: FontWeight.w500,
-                            color: dark
-                                ? WaveColors.textTertiary
-                                : WaveColors.lightTextTertiary,
-                          ),
-                        ),
-                      ),
-                    )),
-                  ),
-            onChanged: (_) => setState(() {}),
-            onSubmitted: (v) {
-              _suppressFocusFlyout = true;
-              _closeFlyout();
-              widget.focus.unfocus();
-              widget.onSubmit(v);
-            },
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Short fade + rise so the dropdown settles in instead of popping.
+class _PanelIn extends StatelessWidget {
+  final Widget child;
+  const _PanelIn({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 120),
+      curve: Curves.easeOutCubic,
+      builder: (context, t, child) => Opacity(
+        opacity: t,
+        child: Transform.translate(offset: Offset(0, (1 - t) * -4), child: child),
+      ),
+      child: child,
     );
   }
 }
@@ -420,7 +681,10 @@ class _BarBtnState extends State<_BarBtn> {
   @override
   Widget build(BuildContext context) {
     final dark = waveIsDark(context);
-    return LWTooltip(
+    return WaveA11yButton(
+      label: widget.tooltip,
+      onTap: widget.onTap,
+      child: LWTooltip(
       message: widget.tooltip,
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
@@ -473,6 +737,7 @@ class _BarBtnState extends State<_BarBtn> {
           ),
         ),
       ),
+    ),
     );
   }
 }
@@ -617,7 +882,10 @@ class _WinBtnState extends State<_WinBtn> {
   @override
   Widget build(BuildContext context) {
     final dark = waveIsDark(context);
-    return LWTooltip(
+    return WaveA11yButton(
+      label: widget.tooltip,
+      onTap: widget.onTap,
+      child: LWTooltip(
       message: widget.tooltip,
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
@@ -646,6 +914,7 @@ class _WinBtnState extends State<_WinBtn> {
           ),
         ),
       ),
+    ),
     );
   }
 }

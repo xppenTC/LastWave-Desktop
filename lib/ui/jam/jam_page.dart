@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:fluent_ui/fluent_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/storage/prefs.dart';
 import '../../features/jam/jam_client.dart';
@@ -10,6 +11,7 @@ import '../components/artwork.dart';
 import '../components/buttons.dart';
 import '../components/inputs.dart';
 import '../theme/tokens.dart';
+import '../theme/wave_icons.dart';
 
 /// Collaborative listening room. Local playback keeps running if the
 /// server cannot be reached; the error is shown here.
@@ -166,6 +168,12 @@ class _WaveJamPageState extends ConsumerState<WaveJamPage> {
                   dot: true,
                 ),
               ],
+              const Spacer(),
+              WaveIconButton(
+                tooltip: 'Close',
+                icon: const Icon(WaveIcons.close, size: 14),
+                onPressed: () => context.go('/home'),
+              ),
             ],
           ),
           const SizedBox(height: 6),
@@ -469,17 +477,30 @@ class _WaveJamPageState extends ConsumerState<WaveJamPage> {
                 runSpacing: 6,
                 children: [
                   _Pill(
-                    label: jam.isMainHost
-                        ? 'Host'
-                        : jam.isHost
-                            ? 'Co-host'
-                            : 'Guest',
+                    label: jam.radio
+                        ? (jam.isHost ? 'Station admin' : 'Listener')
+                        : jam.isMainHost
+                            ? 'Host'
+                            : jam.isHost
+                                ? 'Co-host'
+                                : 'Guest',
                   ),
-                  if (jam.permanent) const _Pill(label: 'Always on'),
+                  if (jam.radio)
+                    _Pill(
+                      label: 'Live station',
+                      color: WaveColors.success,
+                      dot: true,
+                    )
+                  else if (jam.permanent)
+                    const _Pill(label: 'Always on'),
                   _Pill(
-                    label: jam.roomMode == jamModeHostOnly
-                        ? 'Host controls playback'
-                        : 'Everyone controls playback',
+                    label: jam.radio
+                        ? (jam.stationAuto
+                            ? 'Auto radio'
+                            : 'Admin controls playback')
+                        : jam.roomMode == jamModeHostOnly
+                            ? 'Host controls playback'
+                            : 'Everyone controls playback',
                   ),
                 ],
               ),
@@ -554,9 +575,11 @@ class _WaveJamPageState extends ConsumerState<WaveJamPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _Label(jam.isMainHost
-                  ? 'Up next · your queue is shared'
-                  : 'Up next · admin queue'),
+              _Label(jam.radio && jam.stationAuto
+                  ? 'Up next on the station'
+                  : jam.isMainHost
+                      ? 'Up next · your queue is shared'
+                      : 'Up next · admin queue'),
               const SizedBox(height: 10),
               if (jam.queue.isEmpty)
                 Text(
@@ -622,8 +645,26 @@ class _WaveJamPageState extends ConsumerState<WaveJamPage> {
                         ),
                       ),
                       if (person.isHost)
-                        _Pill(label: person.isCoHost ? 'Co-host' : 'Host'),
-                      if (jam.isMainHost && person.userId != jam.userId) ...[
+                        _Pill(
+                          label: jam.radio
+                              ? 'Admin'
+                              : person.isCoHost
+                                  ? 'Co-host'
+                                  : 'Host',
+                        ),
+                      if (jam.radio &&
+                          jam.isMainHost &&
+                          person.userId != jam.userId) ...[
+                        const SizedBox(width: 8),
+                        WaveButton(
+                          onPressed: () =>
+                              controller.transferAdmin(person.userId),
+                          child: const Text('Make admin'),
+                        ),
+                      ],
+                      if (!jam.radio &&
+                          jam.isMainHost &&
+                          person.userId != jam.userId) ...[
                         const SizedBox(width: 8),
                         if (person.isCoHost)
                           WaveButton(

@@ -727,6 +727,10 @@ class AddonApi implements LosslessSource {
     scored.sort((a, b) {
       if (a.title != b.title) return b.title.compareTo(a.title);
       if (a.feat != b.feat) return b.feat.compareTo(a.feat);
+      // An exact album match is identity: it outranks "fewer extra
+      // credits", which otherwise preferred a different release billed
+      // "Kushagra, Showkidd" over the requested "Kushagra, Bharath, Saaheal".
+      if (a.album != b.album) return b.album.compareTo(a.album);
       if (a.extra != b.extra) return a.extra.compareTo(b.extra);
       final ad = durScore(a.track);
       final bd = durScore(b.track);

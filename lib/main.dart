@@ -7,12 +7,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import 'app/accessibility.dart';
 import 'app/deep_link.dart';
 import 'app/window.dart';
 import 'core/artwork/artwork_resolver.dart';
 import 'core/artwork/official_artwork_service.dart';
 import 'core/diagnostics/diagnostics_log.dart';
-import 'core/diagnostics/memory_probe.dart';
 import 'core/error/fatal_crumbs.dart';
 import 'core/platform/allocator_tuning.dart';
 import 'core/storage/app_database.dart';
@@ -27,6 +27,18 @@ Future<void> main(List<String> args) async {
   // change, measured). See lib/core/platform/allocator_tuning.dart.
   applyAllocatorTuning();
   WidgetsFlutterBinding.ensureInitialized();
+  // Desktop is always mouse + keyboard. In the default "automatic" mode a
+  // single touch/pen pointer event (touchscreen, Windows Ink, a touch
+  // keyboard tap) flips Flutter's highlight mode to `touch`, which silences
+  // every hover highlight (FocusableActionDetector only reports hover in
+  // traditional mode), and only a key press flips it back — hence menu rows
+  // that stayed dead until Tab or an Alt+Tab round trip.
+  FocusManager.instance.highlightStrategy =
+      FocusHighlightStrategy.alwaysTraditional;
+  // Screen readers (NVDA, Narrator, VoiceOver): keep the semantics tree
+  // built for the whole session and restore keyboard focus whenever the
+  // window comes back. See lib/app/accessibility.dart (issue #75).
+  AppAccessibility.enable();
   DeepLinks.start(args);
   // Fatal breadcrumbs: log-and-continue-handling (return false) so the
   // next fail-fast names its line in mpv-ops.log. Sync writes only.
@@ -50,17 +62,7 @@ Future<void> main(List<String> args) async {
   PaintingBinding.instance.imageCache.maximumSize = 500;
   PaintingBinding.instance.imageCache.maximumSizeBytes =
       64 << 20; // 64 MiB
-  // Debug-only residency printer: [mem] rss=… img[…imgs/…MiB live=…] with
-  // a one-line gauge per cache owner (art/motion/yt/player/palette). Off
-  // in release builds. See lib/core/diagnostics/memory_probe.dart.
-  //
-  // Started *after* the title-bar early-return on purpose: the hidden
-  // poToken WebView window re-enters `main()`, so starting the probe up
-  // here gave that second isolate its own baseline and its own 30s
-  // `[mem]` stream interleaved with the real one (its own `_baselineRss`
-  // and `_last` statics), which made every log ambiguous.
   if (runWebViewTitleBarWidget(args)) return;
-  MemoryProbe.start();
   // libmpv is deliberately NOT dlopened here. MediaKit.ensureInitialized()
   // just dlopens a multi-MB .so (media_kit's NativeLibrary) — pure
   // first-frame latency — and nothing on the first frame needs it: the

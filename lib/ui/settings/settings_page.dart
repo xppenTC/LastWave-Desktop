@@ -33,6 +33,7 @@ import '../../features/spotify/spotify_api.dart';
 import '../../features/spotify/spotify_auth.dart';
 import '../../features/home/home_providers.dart';
 import '../../features/lastfm/auth_repository.dart';
+import '../auth/lastfm_key_guide.dart';
 import '../../features/settings/accent.dart';
 import '../../features/settings/theme_controller.dart';
 import '../../features/audio_output/output_controller.dart';
@@ -51,6 +52,7 @@ import '../../features/updates/update_service.dart';
 import '../updates/update_dialog.dart';
 import 'backup_actions.dart';
 import 'backup_settings.dart';
+import 'cache_settings.dart';
 import 'diagnostics_actions.dart';
 import 'download_layout_settings.dart';
 import 'library_settings.dart';
@@ -3297,6 +3299,13 @@ class _General extends ConsumerWidget {
           child: BackupSettings(),
         ),
         const SizedBox(height: 16),
+        const _Group(
+          id: 'general.cache',
+          title: 'Cached data',
+          subtitle: 'Pages saved on this device so they open instantly',
+          child: CacheSettings(),
+        ),
+        const SizedBox(height: 16),
         // Diagnostics live on the General page on purpose: a user with a
         // problem finds them without knowing what "Advanced" means, and
         // the export is the only thing we ever ask them to send.
@@ -3630,6 +3639,8 @@ class _ApiKeysState extends ConsumerState<_ApiKeys> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          const LastFmKeyGuide(),
+          const SizedBox(height: 10),
           Row(
             children: [
               Icon(

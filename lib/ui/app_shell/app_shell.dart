@@ -63,9 +63,18 @@ class _WaveShellState extends ConsumerState<WaveShell> {
   bool _railExpanded = false;
   bool _queueOpen = false;
   bool _equalizerOpen = false;
+  // True once a panel has finished sliding shut. Offstage waits for it so
+  // the slide-out is painted instead of vanishing on the first frame.
+  bool _queueSettled = true;
+  bool _equalizerSettled = true;
   // Canvas: docked on the RIGHT edge, pushes the page; queue/EQ overlay it.
   bool _canvasOpen = false;
   bool _miniOpen = false;
+
+  /// F11 pressed away from Now Playing: go fullscreen once the route
+  /// arrives. Stamped so a navigation that never lands can't turn a later,
+  /// unrelated visit into a fullscreen one.
+  DateTime? _pendingImmersiveAt;
   bool _draggingFiles = false;
 
   Size? _savedWindowSize;
@@ -207,6 +216,7 @@ class _WaveShellState extends ConsumerState<WaveShell> {
   bool _dockQueueActive = false;
   bool _dockEqualizerActive = false;
   bool _dockCanvasActive = false;
+  bool _dockCompact = false;
 
   void _closeQueue() => setState(() => _queueOpen = false);
   void _closeCanvas() => setState(() => _canvasOpen = false);
@@ -220,20 +230,24 @@ class _WaveShellState extends ConsumerState<WaveShell> {
     required bool queueActive,
     required bool equalizerActive,
     required bool canvasActive,
+    bool compact = false,
   }) {
     if (_dockCache == null ||
         _dockLyricsActive != lyricsActive ||
         _dockQueueActive != queueActive ||
         _dockEqualizerActive != equalizerActive ||
-        _dockCanvasActive != canvasActive) {
+        _dockCanvasActive != canvasActive ||
+        _dockCompact != compact) {
       _dockLyricsActive = lyricsActive;
       _dockQueueActive = queueActive;
       _dockEqualizerActive = equalizerActive;
       _dockCanvasActive = canvasActive;
+      _dockCompact = compact;
       // The dock is structural: reserves 80px on every view, including
       // Now Playing — its in-page transport was removed so this dock is
       // the single control surface.
       _dockCache = WavePlayerDock(
+        compact: compact,
         onExpand: _expandNowPlaying,
         lyricsActive: lyricsActive,
         queueActive: queueActive,
@@ -269,6 +283,7 @@ class _WaveShellState extends ConsumerState<WaveShell> {
         searchController: _searchController,
         searchFocus: _searchFocus,
         onSearchSubmit: _submitSearch,
+        onGo: _go,
         onPalette: _openPalette,
         onToggleRail: () => setState(() => _railExpanded = !_railExpanded),
         canGoBack: canGoBack,
@@ -331,6 +346,9 @@ class _WaveShellState extends ConsumerState<WaveShell> {
         focusSearch: () => _searchFocus.requestFocus(),
         toggleLyrics: () {
           if (mounted) _openNowPlaying();
+        },
+        toggleFullscreen: () {
+          if (mounted) _toggleFullscreen();
         },
         goBack: () {
           if (mounted) _goBack();
@@ -577,6 +595,18 @@ class _WaveShellState extends ConsumerState<WaveShell> {
     _openNowPlaying();
   }
 
+  /// F11: edge-to-edge Now Playing from anywhere. On Now Playing it toggles;
+  /// elsewhere it opens Now Playing and goes fullscreen on arrival.
+  void _toggleFullscreen() {
+    if (widget.location.startsWith('/now')) {
+      final immersive = ref.read(nowPlayingImmersiveProvider.notifier);
+      immersive.state = !immersive.state;
+      return;
+    }
+    _pendingImmersiveAt = DateTime.now();
+    _openNowPlaying();
+  }
+
   void _openNowPlaying() {
     // Already there (the dock is on every view, Now Playing included).
     if (widget.location.startsWith('/now')) return;
@@ -639,16 +669,7 @@ class _WaveShellState extends ConsumerState<WaveShell> {
   }
 
   void _openPalette() {
-    final history = ref.read(searchRepositoryProvider).history();
-    showWaveCommandPalette(
-      context,
-      recentSearches: history.take(6).toList(),
-      onSearch: (q) {
-        ref.read(searchRepositoryProvider).pushHistory(q);
-        context.go('/search?q=${Uri.encodeComponent(q)}');
-      },
-      onGo: _go,
-    );
+    showWaveCommandPalette(context, onGo: _go);
   }
 
   /// Latest layout/route snapshot for the focus-independent Esc chain
@@ -730,6 +751,19 @@ class _WaveShellState extends ConsumerState<WaveShell> {
           ref.read(nowPlayingImmersiveProvider.notifier).state = false;
         }
       });
+    }
+    // F11 from another page: Now Playing has arrived, finish the job.
+    final pendingAt = _pendingImmersiveAt;
+    if (pendingAt != null && isNowPlaying) {
+      _pendingImmersiveAt = null;
+      if (DateTime.now().difference(pendingAt) <
+          const Duration(seconds: 3)) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            ref.read(nowPlayingImmersiveProvider.notifier).state = true;
+          }
+        });
+      }
     }
     ref.listen<bool>(nowPlayingImmersiveProvider, (prev, next) {
       if (next) {
@@ -954,6 +988,12 @@ class _WaveShellState extends ConsumerState<WaveShell> {
                                 top: 0,
                                 bottom: 0,
                                 right: _queueOpen ? 0 : -(qw + 12),
+                                onEnd: () {
+                                  if (_queueSettled == _queueOpen) {
+                                    setState(
+                                        () => _queueSettled = !_queueOpen);
+                                  }
+                                },
                                 width: qw,
                                 child: ExcludeFocus(
                                   excluding: !_queueOpen,
@@ -967,7 +1007,7 @@ class _WaveShellState extends ConsumerState<WaveShell> {
                                     // Layout still runs (cheap box
                                     // math); scroll offset is kept.
                                     child: Offstage(
-                                      offstage: !_queueOpen,
+                                      offstage: !_queueOpen && _queueSettled,
                                       child: _queuePanelCache ??=
                                           WaveQueuePanel(onClose: _closeQueue),
                                     ),
@@ -984,13 +1024,19 @@ class _WaveShellState extends ConsumerState<WaveShell> {
                                 top: 0,
                                 bottom: 0,
                                 right: _equalizerOpen ? 0 : -(ew + 12),
+                                onEnd: () {
+                                  if (_equalizerSettled == _equalizerOpen) {
+                                    setState(() =>
+                                        _equalizerSettled = !_equalizerOpen);
+                                  }
+                                },
                                 width: ew,
                                 child: ExcludeFocus(
                                   excluding: !_equalizerOpen,
                                   child: IgnorePointer(
                                     ignoring: !_equalizerOpen,
                                     child: Offstage(
-                                      offstage: !_equalizerOpen,
+                                      offstage: !_equalizerOpen && _equalizerSettled,
                                       child: _equalizerPanelCache ??=
                                           WaveEqualizerPanel(
                                             onClose: _closeEqualizer,
@@ -999,6 +1045,31 @@ class _WaveShellState extends ConsumerState<WaveShell> {
                                   ),
                                 ),
                               ),
+                              // Immersive: the dock floats over the stage
+                              // and fades with the page's other controls
+                              // (it is not in the Column below then).
+                              // Painted last so the queue / equalizer
+                              // panels never cover its toggles.
+                              if (immersive)
+                                AnimatedPositioned(
+                                  duration: waveMotion(
+                                    context,
+                                    WaveMotion.normal,
+                                  ),
+                                  curve: Curves.easeOutCubic,
+                                  left: 0,
+                                  right: _canvasOpen ? cw : 0,
+                                  bottom: 0,
+                                  child: WaveImmersiveDockOverlay(
+                                    child: _dockFor(
+                                      lyricsActive: isNowPlaying,
+                                      queueActive: _queueOpen,
+                                      equalizerActive: _equalizerOpen,
+                                      canvasActive: _canvasOpen,
+                                      compact: true,
+                                    ),
+                                  ),
+                                ),
                             ],
                           );
                         },

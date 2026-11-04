@@ -48,8 +48,14 @@ class WavePlayerDock extends ConsumerWidget {
   final bool equalizerActive;
   final bool canvasActive;
   final VoidCallback onToggleMini;
+
+  /// Fullscreen Now Playing overlay: one slim row with only the essentials
+  /// (like, transport, timeline, volume, queue, exit). The track identity is
+  /// already on the stage, so it is not repeated here.
+  final bool compact;
   const WavePlayerDock({
     super.key,
+    this.compact = false,
     required this.onExpand,
     required this.onToggleQueue,
     required this.onToggleLyrics,
@@ -83,8 +89,12 @@ class WavePlayerDock extends ConsumerWidget {
     final jamUntil = ref.watch(jamControllerProvider.select(
       (j) => j.phase == JamPhase.active ? j.cooldownUntilMs : 0,
     ));
-    final jamLocked = jamUntil > 0;
-    final jamUnlockAt = jamLocked ? jamClock(jamUntil) : '';
+    // Live stations: listeners can't pause, skip or seek at all.
+    final jamLive = ref.watch(jamControllerProvider.select(
+      (j) => j.isStationListener,
+    ));
+    final jamLocked = jamUntil > 0 || jamLive;
+    final jamUnlockAt = jamUntil > 0 ? jamClock(jamUntil) : '';
     final artworkUrl = player.current?.artworkUrl ?? '';
     final dockTint = ref.watch(artworkSeedProvider(artworkUrl)).valueOrNull;
 
@@ -114,7 +124,7 @@ class WavePlayerDock extends ConsumerWidget {
         );
       },
       child: SizedBox(
-        height: WaveDensity.dock,
+        height: compact ? _kCompactDockHeight : WaveDensity.dock,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12),
           child: LayoutBuilder(
@@ -123,6 +133,18 @@ class WavePlayerDock extends ConsumerWidget {
               // MediaQuery window width which overestimates by ~200px.
               final dockW = constraints.maxWidth;
               final narrow = dockW < 680;
+              if (compact) {
+                return _compactBar(
+                  dockW: dockW,
+                  narrow: narrow,
+                  current: current,
+                  isPlaying: player.isPlaying,
+                  isBuffering: player.isBuffering,
+                  jamLocked: jamLocked,
+                  jamUnlockAt: jamUnlockAt,
+                  notifier: notifier,
+                );
+              }
               return Row(
                 children: [
                   // LEFT — identity (290px, placeholder when idle).
@@ -245,15 +267,19 @@ class WavePlayerDock extends ConsumerWidget {
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 _Glyph(
-                                  tooltip: 'Shuffle',
+                                  tooltip: jamLive ? 'Live station' : 'Shuffle',
                                   icon: WaveIcons.shuffle,
-                                  active: player.shuffleEnabled,
-                                  onTap: notifier.toggleShuffle,
+                                  // Live rooms: off and dimmed (not just un-lit),
+                                  // since the host owns the queue order.
+                                  active: player.shuffleEnabled && !jamLive,
+                                  onTap: jamLive ? null : notifier.toggleShuffle,
                                 ),
                                 _Glyph(
-                                  tooltip: jamLocked
-                                      ? 'Locked in Jam until $jamUnlockAt'
-                                      : 'Previous',
+                                  tooltip: jamLive
+                                      ? 'Live station'
+                                      : jamLocked
+                                          ? 'Locked in Jam until $jamUnlockAt'
+                                          : 'Previous',
                                   icon: WaveIcons.previous,
                                   large: true,
                                   onTap: current == null || jamLocked
@@ -266,13 +292,16 @@ class WavePlayerDock extends ConsumerWidget {
                                   // Resuming is always allowed; only pausing
                                   // is locked during the Jam cooldown.
                                   enabled: current != null &&
+                                      !jamLive &&
                                       !(jamLocked && player.isPlaying),
                                   onTap: notifier.toggle,
                                 ),
                                 _Glyph(
-                                  tooltip: jamLocked
-                                      ? 'Locked in Jam until $jamUnlockAt'
-                                      : 'Next',
+                                  tooltip: jamLive
+                                      ? 'Live station'
+                                      : jamLocked
+                                          ? 'Locked in Jam until $jamUnlockAt'
+                                          : 'Next',
                                   icon: WaveIcons.next,
                                   large: true,
                                   onTap: current == null || jamLocked
@@ -280,15 +309,16 @@ class WavePlayerDock extends ConsumerWidget {
                                       : notifier.next,
                                 ),
                                 _Glyph(
-                                  tooltip:
-                                      'Repeat ${player.repeatMode.name}',
+                                  tooltip: jamLive
+                                      ? 'Live station'
+                                      : 'Repeat ${player.repeatMode.name}',
                                   icon: player.repeatMode ==
                                           RepeatMode.one
                                       ? WaveIcons.repeatOne
                                       : WaveIcons.repeat,
-                                  active: player.repeatMode !=
-                                      RepeatMode.off,
-                                  onTap: notifier.cycleRepeat,
+                                  active: player.repeatMode != RepeatMode.off &&
+                                      !jamLive,
+                                  onTap: jamLive ? null : notifier.cycleRepeat,
                                 ),
                               ],
                             ),
@@ -387,7 +417,6 @@ class WavePlayerDock extends ConsumerWidget {
                             showMiniItem: !showMini,
                             onExpand: onExpand,
                             onToggleMini: onToggleMini,
-                            onToggleEqualizer: onToggleEqualizer,
                           ),
                         ],
                       ),
@@ -401,7 +430,75 @@ class WavePlayerDock extends ConsumerWidget {
       ),
     );
   }
+
+  /// The fullscreen overlay row. One line instead of the dock's two-row
+  /// centre: [like] [prev play next] [time ━━━ time] [volume] [queue] [exit].
+  /// Shuffle/repeat, quality, Jam, equalizer, canvas, mini player and the
+  /// More menu are left out; leaving fullscreen brings them all back.
+  Widget _compactBar({
+    required double dockW,
+    required bool narrow,
+    required PlayableTrack? current,
+    required bool isPlaying,
+    required bool isBuffering,
+    required bool jamLocked,
+    required String jamUnlockAt,
+    required PlaybackService notifier,
+  }) {
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 1100),
+        child: Row(
+          children: [
+            if (current != null) _LikeGlyph(track: current),
+            _Glyph(
+              tooltip:
+                  jamLocked ? 'Locked in Jam until $jamUnlockAt' : 'Previous',
+              icon: WaveIcons.previous,
+              large: true,
+              onTap: current == null || jamLocked ? null : notifier.previous,
+            ),
+            _PlayGlyph(
+              playing: isPlaying,
+              buffering: isBuffering,
+              enabled: current != null && !(jamLocked && isPlaying),
+              onTap: notifier.toggle,
+            ),
+            _Glyph(
+              tooltip: jamLocked ? 'Locked in Jam until $jamUnlockAt' : 'Next',
+              icon: WaveIcons.next,
+              large: true,
+              onTap: current == null || jamLocked ? null : notifier.next,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: RepaintBoundary(child: _DockProgress(compact: narrow)),
+            ),
+            const SizedBox(width: 8),
+            if (dockW >= 700)
+              const _VolumeSection()
+            else
+              const _VolumeFlyoutSection(),
+            _Glyph(
+              tooltip: 'Queue',
+              icon: WaveIcons.queue,
+              active: queueActive,
+              onTap: onToggleQueue,
+            ),
+            _Glyph(
+              tooltip: 'Exit fullscreen (Esc)',
+              icon: WaveIcons.exitFullscreen,
+              onTap: onExpand,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
+
+/// Height of the fullscreen overlay dock ([WavePlayerDock.compact]).
+const double _kCompactDockHeight = 56;
 
 /// Placeholder identity — dock never collapses to zero height.
 class _IdleIdentity extends StatelessWidget {
@@ -954,6 +1051,7 @@ class _DockProgressState extends ConsumerState<_DockProgress> {
     // No total means nothing to seek along: a step would clamp to zero and
     // yank a playing track back to the start.
     if (total <= Duration.zero) return;
+    if (ref.read(jamControllerProvider).isStationListener) return;
     final target = base + Duration(seconds: seconds);
     final clamped = target.isNegative
         ? Duration.zero
@@ -963,6 +1061,9 @@ class _DockProgressState extends ConsumerState<_DockProgress> {
 
   @override
   Widget build(BuildContext context) {
+    final jamLive = ref.watch(jamControllerProvider.select(
+      (j) => j.isStationListener,
+    ));
     final dark = waveIsDark(context);
     final accent = waveAccent(context);
     final clock = ref.watch(playbackServiceProvider.select((s) => (
@@ -987,7 +1088,7 @@ class _DockProgressState extends ConsumerState<_DockProgress> {
     // or a freshly-resolved stream sits at zero for a beat. Printing that as
     // "0:00" claimed a zero-length track and pinned the thumb to the start.
     final hasDuration = totalMs > 0;
-    final hoverLabel = _hoverRatio == null || !hasDuration
+    final hoverLabel = _hoverRatio == null || !hasDuration || jamLive
         ? null
         : _fmt(Duration(
             milliseconds: (_hoverRatio! * totalMs).round()));
@@ -1013,6 +1114,12 @@ class _DockProgressState extends ConsumerState<_DockProgress> {
                   HardwareKeyboard.instance.logicalKeysPressed
                       .contains(LogicalKeyboardKey.shiftRight);
               final step = shift ? 15 : 5;
+              // Live station: the arrows are claimed but never seek.
+              if (jamLive &&
+                  (e.logicalKey == LogicalKeyboardKey.arrowRight ||
+                      e.logicalKey == LogicalKeyboardKey.arrowLeft)) {
+                return KeyEventResult.handled;
+              }
               if (e.logicalKey == LogicalKeyboardKey.arrowRight) {
                 _seekBy(clock.position, clock.duration, step);
                 return KeyEventResult.handled;
@@ -1025,11 +1132,15 @@ class _DockProgressState extends ConsumerState<_DockProgress> {
             },
             child: LWTooltip(
               message: hoverLabel ??
-                  (hasDuration ? 'Seek (←/→ ±5s)' : 'Waiting for the stream'),
+                  (jamLive
+                      ? 'Seeking is off in live rooms'
+                      : hasDuration ? 'Seek (←/→ ±5s)' : 'Waiting for the stream'),
               child: MouseRegion(
-                cursor: hasDuration
-                    ? SystemMouseCursors.click
-                    : SystemMouseCursors.basic,
+                cursor: jamLive
+                    ? SystemMouseCursors.forbidden
+                    : hasDuration
+                        ? SystemMouseCursors.click
+                        : SystemMouseCursors.basic,
                 onExit: (_) =>
                     setState(() => _hoverRatio = null),
                 onHover: (e) {
@@ -1053,14 +1164,17 @@ class _DockProgressState extends ConsumerState<_DockProgress> {
                     padding:
                         const EdgeInsets.symmetric(vertical: 7),
                     color: Colors.transparent,
-                    child: RepaintBoundary(
+                    child: Opacity(
+                      // Dimmed + thumbless: reads as disabled, not draggable.
+                      opacity: jamLive ? 0.45 : 1,
+                      child: RepaintBoundary(
                       child: wavy
                           ? _WaveTimeline(
                               progress: clock.position,
                               buffered: clock.buffered,
                               total: clock.duration,
-                              showThumb: hasDuration,
-                              onSeek: notifier.seek,
+                              showThumb: hasDuration && !jamLive,
+                              onSeek: jamLive ? null : notifier.seek,
                               baseColor: (dark ? Colors.white : Colors.black)
                                   .withValues(alpha: 0.12),
                               bufferedColor: (dark ? Colors.white : Colors.black)
@@ -1075,9 +1189,9 @@ class _DockProgressState extends ConsumerState<_DockProgress> {
                               progress: clock.position,
                               buffered: clock.buffered,
                               total: clock.duration,
-                              onSeek: notifier.seek,
+                              onSeek: jamLive ? null : notifier.seek,
                               barHeight: 3,
-                              thumbRadius: hasDuration ? 5 : 0,
+                              thumbRadius: hasDuration && !jamLive ? 5 : 0,
                               thumbColor: dark ? Colors.white : Colors.black,
                               thumbGlowColor:
                                   accent.withValues(alpha: 0.25),
@@ -1091,6 +1205,7 @@ class _DockProgressState extends ConsumerState<_DockProgress> {
                                       .withValues(alpha: 0.12),
                               timeLabelLocation: avp.TimeLabelLocation.none,
                             ),
+                    ),
                     ),
                   ),
                 ),
@@ -1532,7 +1647,6 @@ class _DockOverflow extends ConsumerWidget {
   final bool showMiniItem;
   final VoidCallback onExpand;
   final VoidCallback onToggleMini;
-  final VoidCallback? onToggleEqualizer;
   const _DockOverflow({
     this.showJamItem = false,
     this.showQualityItem = false,
@@ -1541,7 +1655,6 @@ class _DockOverflow extends ConsumerWidget {
     this.showMiniItem = false,
     required this.onExpand,
     required this.onToggleMini,
-    this.onToggleEqualizer,
   });
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1606,13 +1719,6 @@ class _DockOverflow extends ConsumerWidget {
                 const Icon(WaveIcons.miniPlayer, size: 15),
             label: 'Mini player',
             onPressed: onToggleMini,
-          ),
-        if (onToggleEqualizer != null)
-          WaveMenuAction(
-            leading:
-                const Icon(WaveIcons.equalizer, size: 15),
-            label: 'Equalizer',
-            onPressed: onToggleEqualizer!,
           ),
         if (hasCollapsed) const WaveMenuSeparator(),
         WaveMenuAction(
