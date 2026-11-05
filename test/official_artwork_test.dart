@@ -91,6 +91,13 @@ void main() {
         ),
         isTrue,
       );
+      // KHInsider's own scan is never swapped for a store search hit.
+      expect(
+        OfficialArtworkService.isOfficialArtwork(
+          'https://jetta.vgmtreasurechest.com/soundtracks/a/thumbs/Cover.jpg',
+        ),
+        isTrue,
+      );
       expect(
         OfficialArtworkService.isOfficialArtwork(
           'https://i.ytimg.com/vi/video12345/hqdefault.jpg',

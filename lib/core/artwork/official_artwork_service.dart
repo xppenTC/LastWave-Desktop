@@ -255,6 +255,9 @@ class OfficialArtworkService {
     'spotifycdn.com',
     'deezer.com',
     'dzcdn.net',
+    // KHInsider album scans: the game's own cover, which a store search by
+    // title would replace with an unrelated album.
+    'vgmtreasurechest.com',
   ];
 
   static const _youtubeCdns = [
