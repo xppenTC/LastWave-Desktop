@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import '../../core/app_info.dart';
 import '../../core/storage/app_database.dart';
+import '../khinsider/khinsider_parser.dart';
 import '../library/playlist_file.dart' show youtubeIdOf;
 import '../library/playlists.dart';
 import 'backup_sync.dart';
@@ -57,6 +58,8 @@ StoredTrack trackFromBackup(Map<String, dynamic> json) {
     videoId: videoId,
     album: json['album']?.toString() ?? '',
     url: videoId.isEmpty ? url : '',
+    // The phone's KHInsider rows play their own page, never a YouTube match.
+    playbackUrl: KhInsiderParser.isPlaybackUri(url) ? url : '',
   );
 }
 

@@ -173,6 +173,13 @@ void main() {
     final mp3Only = {'mp3': files['mp3']!};
     expect(KhInsiderParser.pickFile(mp3Only, KhFormat.flac), endsWith('.mp3'));
     expect(KhInsiderParser.pickFile(const {}, KhFormat.flac), isNull);
+    // AAC only when it is the sole file; lossless before lossy.
+    const lossy = {'m4a': 'x.m4a', 'mp3': 'x.mp3'};
+    expect(KhInsiderParser.pickFile(lossy, KhFormat.flac), 'x.mp3');
+    const withFlac = {'m4a': 'x.m4a', 'flac': 'x.flac'};
+    expect(KhInsiderParser.pickFile(withFlac, KhFormat.mp3), 'x.flac');
+    expect(KhInsiderParser.pickFile(const {'m4a': 'x.m4a'}, KhFormat.flac),
+        'x.m4a');
   });
 
   test('playback URI round-trips the encoded page', () {

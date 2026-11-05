@@ -524,12 +524,19 @@ class KhInsiderParser {
     return out;
   }
 
-  /// The preferred format's file, falling back to MP3 and then any audio
-  /// file.
-  static String? pickFile(Map<String, String> files, KhFormat preferred) =>
-      files[preferred.extension] ??
-      files['mp3'] ??
-      (files.isEmpty ? null : files.values.first);
+  /// The preferred format's file, else the best one left: lossless first,
+  /// AAC (m4a/aac) only when nothing else is there.
+  static String? pickFile(Map<String, String> files, KhFormat preferred) {
+    for (final ext in [preferred.extension, ..._fallbackOrder]) {
+      final url = files[ext];
+      if (url != null) return url;
+    }
+    return files.isEmpty ? null : files.values.first;
+  }
+
+  static const _fallbackOrder = [
+    'flac', 'wav', 'mp3', 'opus', 'ogg', 'm4a', 'aac', //
+  ];
 
   static int? parseDuration(String text) {
     final parts = <int>[];

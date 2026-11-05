@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../core/audio/stream_models.dart';
 import '../../core/storage/app_database.dart';
+import '../khinsider/khinsider_parser.dart';
 import '../search/shared_providers.dart';
 
 /// Stored playlist track (JSON-serialised inside `saved_playlists`).
@@ -73,11 +74,20 @@ class StoredTrack {
         album: json['album']?.toString() ?? '',
         durationSeconds:
             int.tryParse('${json['durationSeconds'] ?? 0}') ?? 0,
-        playbackUrl: json['playbackUrl']?.toString() ?? '',
+        playbackUrl: _playbackUrlOf(json),
         url: json['url']?.toString() ?? '',
         addedAtMillis:
             int.tryParse('${json['addedAtMillis'] ?? 0}') ?? 0,
       );
+
+  /// Rows imported from a phone backup before the fix kept a KHInsider
+  /// page only in `url`, so they were played from a YouTube match.
+  static String _playbackUrlOf(Map<String, dynamic> json) {
+    final own = json['playbackUrl']?.toString() ?? '';
+    if (own.isNotEmpty) return own;
+    final url = json['url']?.toString();
+    return KhInsiderParser.isPlaybackUri(url) ? url! : '';
+  }
 
   PlayableTrack toPlayable() => PlayableTrack(
         title: name,

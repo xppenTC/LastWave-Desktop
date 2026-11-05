@@ -152,6 +152,18 @@ void main() {
     expect(synced.tracks.map((t) => t.videoId), ['a3Ue-LN5B9U']);
   });
 
+  test('a phone KHInsider row plays its own page, not a YouTube match', () {
+    const page = 'khinsider://track?page=%2Fgame-soundtracks%2Falbum%2Fa%2F1.mp3';
+    final t = trackFromBackup({'name': 'Twinleaf Town', 'artist': 'A', 'url': page});
+    expect(t.playbackUrl, page);
+    expect(trackToBackup(t)['url'], page);
+    // Rows imported before the fix: page only in `url`.
+    final old = StoredTrack.fromJson({'name': 'x', 'artist': 'A', 'url': page});
+    expect(old.toPlayable().playbackUrl, page);
+    expect(StoredTrack.fromJson({'name': 'x', 'url': '/music/a.flac'}).playbackUrl,
+        isEmpty);
+  });
+
   test('tracks already here keep what only the desktop knows', () async {
     final db = AppDatabase.inMemory();
     await sync(db, phoneBackup());
