@@ -1,78 +1,205 @@
 <div align="center">
 
-<img src="lastwave-logo.png" alt="LastWave Logo" width="120" height="120" style="border-radius: 50%;" />
+<img src="LastWave_Desktop_v7_1440p.png" alt="LastWave Desktop Banner" width="100%" style="border-radius: 16px;" />
 
-# LastWave
+<h1>LastWave</h1>
 
-**Next-Gen Lossless Music player with Algorithmic Smart Playlist Generator, Real-Time Synced Lyrics & Last.fm Scrobbler for Desktop.**
+**Simple Desktop YouTube Music client with WinUI, Bit-Perfect playback, Automix, Lossless addons & advanced audiophile features.**
+
+<br/>
 
 <p align="center">
-  <a href="https://github.com/Clash-Projects/LastWave-Desktop/stargazers">
-    <img src="https://img.shields.io/github/stars/Clash-Projects/LastWave-Desktop?style=for-the-badge&color=ffd0b0&labelColor=2d2d2d" alt="Stars" />
-  </a>
-  <a href="#">
-    <img src="https://img.shields.io/badge/Client-Lossless%20Music-FF0000?style=for-the-badge&logo=lossless&logoColor=white&labelColor=2d2d2d" alt="Lossless Music Client" />
-  </a>
-  <a href="#">
-    <img src="https://img.shields.io/badge/Scrobbler-Last.fm-D51007?style=for-the-badge&logo=lastdotfm&logoColor=white&labelColor=2d2d2d" alt="Last.fm Scrobbler" />
-  </a>
-  <a href="#">
-    <img src="https://img.shields.io/badge/Platform-Desktop-3DDC84?style=for-the-badge&logo=windows&logoColor=white&labelColor=2d2d2d" alt="Platform" />
-  </a>
+  <a href="https://t.me/clashprojects" target="_blank"><img src="docs/badges/btn_telegram_support.svg" alt="Telegram Support" height="42" /></a>
+  <a href="https://t.me/MaterialYouApp" target="_blank"><img src="docs/badges/btn_telegram_channel.svg" alt="Telegram Channel" height="42" /></a>
+  <a href="https://discord.gg/DmyM2p2fMe" target="_blank"><img src="docs/badges/btn_discord.svg" alt="Discord Community" height="42" /></a>
 </p>
 
 </div>
 
-<br/>
+---
 
-<div align="center">
-<img src="screenshots/homepage.png" alt="LastWave Homepage Screenshot" width="80%" style="border-radius: 14px; margin: 4px;"/>
-<img src="screenshots/player.png" alt="LastWave Lyrics Screenshot" width="80%" style="border-radius: 14px; margin: 4px;" />
+## Overview
+
+LastWave Desktop is a fast, native desktop YouTube Music client with modern WinUI styling for Windows, Linux, and macOS. It delivers high-fidelity audio playback and a fluid interface that adapts to your music.
+
+For audio lovers, LastWave Desktop packs Bit-Perfect audio output, Lossless FLAC addon support, 15-band parametric equalizer, smooth Automix transitions, Spotify Canvas & integration, and real-time synchronized lyrics, all in a lightweight desktop application.
+
+---
+
+## Features
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+
+#### Playback
+- Stream any track or video from YouTube Music
+- Background audio playback & system media controls
+- High-res audio downloads with embedded metadata & `.lrc` lyrics
+- Download & cache for offline listening
+- Skip silence & sleep timer
+
+</td>
+    <td width="50%" valign="top">
+
+#### Audio
+- Bit-Perfect audio output (direct hardware bypass)
+- Lossless FLAC addon support (up to 24-bit Hi-Res)
+- 15-band Parametric Equalizer & AutoEQ presets
+- Smart Automix transitions & smooth crossfade
+- Audio normalization (ReplayGain / LUFS)
+- Real-time tempo & pitch control
+
+</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+
+#### Lyrics & Discovery
+- Live millisecond-synchronized lyrics (LRCLIB)
+- Lyrics romanization for non-Latin scripts (Japanese, Korean, etc.)
+- Multi-language lyrics translation
+- Spotify Canvas & animated video backgrounds
+- Personalized quick picks, mood radios & genre discovery
+- Search songs, albums, artists, videos, and playlists
+
+</td>
+    <td width="50%" valign="top">
+
+#### Library & Account
+- Full library management & offline cached library
+- Spotify Integration (Account login, Liked Songs sync & deep links)
+- Import public playlists from Spotify & Apple Music
+- YouTube Music account login & bidirectional sync
+- Local & cloud playlists with custom reordering
+- Custom audio tag editing & cover art selection
+
+</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+
+#### Social
+- Listen together with friends in real-time
+- Built-in Last.fm scrobbler with background tracking
+- Safe Discord Rich Presence with live album art
+- Export and share lyrics as aesthetic quote cards
+
+</td>
+    <td width="50%" valign="top">
+
+#### Interface
+- Clean WinUI & Fluent design interface
+- Real-time acrylic blur and backdrop refraction
+- Dynamic color theming + preset palettes
+- Light, Dark, and Pure Black modes
+- Global media hotkeys & mini-player
+
+</td>
+  </tr>
+</table>
+
+---
+
+## Getting Started
+
+### Installation
+
+| Channel | Source | Compatibility |
+|:---|:---|:---|
+| **Windows** | [GitHub Releases](https://github.com/Clash-Projects/LastWave-Desktop/releases) | Windows 10 & 11 (.exe / .msix installer) |
+| **Linux** | [GitHub Releases](https://github.com/Clash-Projects/LastWave-Desktop/releases) | AppImage / Flatpak / deb packages |
+| **macOS** | [GitHub Releases](https://github.com/Clash-Projects/LastWave-Desktop/releases) | Apple Silicon & Intel (.dmg) |
+| **Android App** | [LastWave-Native](https://github.com/Clash-Projects/LastWave-Native) | Official mobile client for Android devices |
+
+### Quick Setup
+
+1. Download and run the installer for your operating system.
+2. *(Optional)* Navigate to **Settings → Audio** to configure:
+   - **Bit-Perfect Output:** Enable exclusive output mode for bit-perfect audio.
+   - **Equalizer Presets:** Apply parametric EQ curves or headphone correction.
+   - **Lossless Addons:** Enable the modular addon service for Hi-Res FLAC playback.
+3. Start streaming music, exploring smart radios, and enjoying synced lyrics!
+
+---
+
+## Building from Source
+
+### Prerequisites
+- **Flutter SDK:** Version 3.13+ or higher
+- **C++ Build Tools:** Visual Studio (Windows), build-essential (Linux), or Xcode (macOS)
+
+### Build Instructions
+
+```bash
+# Clone the repository
+git clone https://github.com/Clash-Projects/LastWave-Desktop.git
+cd LastWave-Desktop
+
+# Install dependencies
+flutter pub get
+
+# Build release executable for your platform
+flutter build windows --release   # Windows
+flutter build linux --release     # Linux
+flutter build macos --release     # macOS
+```
+
+> [!TIP]
+> For local development and hot reload, connect your target environment and run `flutter run -d windows` (or `-d linux` / `-d macos`).
+
+---
+
+## Support the Project
+
+If LastWave has been useful to you, consider supporting its development.
+
+<div align="left">
+  <table style="margin: 0 auto; border-collapse: collapse; border: none;">
+    <tr>
+      <td align="center" style="padding: 15px; border: none;">
+        <a href="https://buymeacoffee.com/ajisth" target="_blank" style="text-decoration:none;"><img src="docs/badges/bmac.png" alt="Buy Me A Coffee" width="140" style="border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,0.2);"/></a>
+      </td>
+      <td align="center" style="padding: 15px; border: none;">
+        <a href="https://buymeachai.ezee.li/ajisth69" target="_blank" style="text-decoration:none;"><img src="docs/badges/upi.png" alt="UPI (Buy Me A Chai)" width="140" style="border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,0.2);"/></a>
+      </td>
+      <td align="center" style="padding: 15px; border: none;">
+        <a href="https://github.com/sponsors/ajisth69" target="_blank" style="text-decoration:none;"><img src="docs/badges/github_sponsors.svg" alt="GitHub Sponsors" width="140" style="border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,0.2);"/></a>
+      </td>
+    </tr>
+  </table>
 </div>
 
-<div>
-  <h2>Overview</h2>
-  <p>LastWave is a next-gen lossless music player for desktop that comes with an algorithmic smart playlist generator, real-time synced lyrics, and Last.fm scrobbler. It is designed to provide a seamless music listening experience with high-quality audio playback and intelligent playlist management.</p>
-</div>
+---
 
-<div>
-  <h2>Features</h2>
-  <ul>
-    <li>Lossless music playback for high-quality audio experience.</li>
-    <li>Algorithmic smart playlist generator that creates playlists based on your listening habits.</li>
-    <li>Real-time synced lyrics display for an immersive music experience.</li>
-    <li>Last.fm scrobbler integration to track your listening history and discover new music.</li>
-    <li>YouTube Music integration for streaming and managing your favorite tracks.</li>
-  </ul>
-</div>
+## Acknowledgements
 
-<!-- Getting Started
-Download the latest APK from the Releases or Actions tab.
-Install LastWave-v4.2.2-release.apk on your Android device (Android 7.0+).
-Connect your Last.fm account in Settings → Integrations to unlock the scrobbler, taste mixes, and personalized discovery radar.
-Enjoy ad-free streaming and smart playlist generation! -->
+LastWave Desktop is made possible thanks to these open-source projects:
 
-<div>
-  <h2>Installation</h2>
-  <p>To install LastWave on your desktop, follow these steps:</p>
-  <ol>
-    <li>Download the latest version of LastWave from the <a href="https://github.com/Clash-Projects/LastWave-Desktop/releases">Releases</a> tab.</li>
-    <li>Run the installer and follow the on-screen instructions.</li>
-  </ol>
-</div>
+- **[media_kit](https://github.com/media-kit/media-kit)** — Audio playback engine powered by libmpv
+- **[Limusic](https://github.com/chenyandian/Limusic)** — InnerTube client registry & stream resolution fast path
+- **[LRCLIB](https://lrclib.net/)** — Real-time millisecond-synchronized lyrics database
+- **[NewPipe](https://github.com/TeamNewPipe/NewPipeExtractor)** — Signature decipher patterns & extraction logic
+- **[fluent_ui](https://github.com/bdlukaa/fluent_ui)** — WinUI & Fluent design system for desktop
 
+---
 
-## <img src="https://api.iconify.design/lucide:shield-alert.svg?color=%23FFB4A2" width="20" height="20" align="center" /> Disclaimer
+## Contributors
 
-> [!NOTE]
-> **Educational & Research Notice**
->
-> LastWave is an open-source, non-commercial application developed strictly for research and educational purposes.
->
-> **No Affiliation & Content Policy**
-> - LastWave is an independent project and is **not affiliated with, endorsed, or sponsored by Google LLC, YouTube, YouTube Music, Spotify, Apple Inc., Last.fm, or any music service**.
-> - LastWave **does not host, stream from private servers, or distribute any copyrighted media**. All content and metadata are accessed directly from public endpoints in accordance with their respective terms. All trademarks belong to their respective owners.
+LastWave wouldn't be possible without our incredible community of contributors. Thank you for making it better every day!
 
-<div align="center">
-  <p>Built with ❤️ by <a href="https://github.com/mrinmoyhaloi">Mrinmoy</a>, <a href="https://github.com/SYR3X">Kehan</a> & <a href="https://github.com/ajisth69">Ajisth</a>.</p>
-</div>
+<p align="center">
+  <a href="https://github.com/Clash-Projects/LastWave-Desktop/graphs/contributors">
+    <img src="https://contrib.rocks/image?repo=Clash-Projects/LastWave-Desktop" alt="Contributors" />
+  </a>
+</p>
+
+---
+
+## Disclaimer
+
+LastWave is an open-source, non-commercial application developed strictly for educational and research purposes.
+
+- **No Affiliation:** This project is not affiliated with, funded, authorized, endorsed by, or in any way associated with Google LLC, YouTube, YouTube Music, Spotify, Apple Inc., Last.fm, or any of their subsidiaries.
+- **Content Delivery:** LastWave does not host, store on private servers, or distribute copyrighted media. All playback streams and metadata are resolved directly from public endpoints.
+- **Trademarks:** All product names, logos, trademarks, and registered trademarks belong to their respective owners.

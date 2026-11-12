@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,6 +8,7 @@ import 'package:media_kit_video/media_kit_video.dart';
 
 import 'animated_artwork_service.dart';
 import '../diagnostics/trace_crumb.dart';
+import '../platform/allocator_tuning.dart';
 
 /// App-scoped muted motion-art player.
 ///
@@ -26,6 +28,22 @@ import '../diagnostics/trace_crumb.dart';
 /// Whether the artwork player presents through the H/W (ANGLE/D3D11) texture
 /// path. Off by default everywhere; see the note at its use.
 const bool _artworkHardwarePresent = bool.fromEnvironment('LW_ARTWORK_HW');
+
+/// `--dart-define=LW_ARTWORK_SW_DECODE=1` forces CPU decode on Windows.
+const bool _forceSoftwareDecode =
+    bool.fromEnvironment('LW_ARTWORK_SW_DECODE');
+
+/// Decoder for motion art. Windows uses D3D11VA in *copy-back* mode: the
+/// GPU decodes, frames come back to system memory, and presentation stays
+/// on the software pixel-buffer path above (no D3D11 texture interop, so
+/// the fail-fast that path caused cannot return). Elsewhere stays `no`
+/// (VA-API dmabuf interop yields zero frames on Linux+Mesa).
+String get _artworkHwdec =>
+    Platform.isWindows && !_forceSoftwareDecode ? 'd3d11va-copy' : 'no';
+
+/// Output edge for motion art: the texture is pre-allocated at this size
+/// and the `vf` scale lands on it, so frames are scaled exactly once.
+const int _artworkOutputPx = 384;
 
 class AnimatedArtworkSession extends ChangeNotifier {
   Player? _player;
@@ -282,6 +300,7 @@ class AnimatedArtworkSession extends ChangeNotifier {
           _serialized(() async {
             try {
               await _player?.pause();
+              trimProcessMemory();
             } catch (_) {}
           }),
         );
@@ -415,10 +434,9 @@ class AnimatedArtworkSession extends ChangeNotifier {
       configuration: const PlayerConfiguration(
         muted: true,
         title: 'LastWave Artwork',
-        // 16 MiB holds an entire Apple fMP4, Tidal 1280x1280 MP4, or
-        // Community Canvas loop in the demuxer back-buffer so `loop-file=inf`
-        // seeks back to 0 purely in memory without re-downloading.
-        bufferSize: 16 * 1024 * 1024,
+        // 4 MiB easily holds multiple loops of Apple fMP4, Tidal 1280x1280 MP4,
+        // or Community Canvas loops (~500KB-2MB) while avoiding 16-32 MiB RSS bloat.
+        bufferSize: 4 * 1024 * 1024,
       ),
     );
     TraceCrumb.write('art controller-create');
@@ -429,8 +447,8 @@ class AnimatedArtworkSession extends ChangeNotifier {
         // Fixed output size avoids a texture realloc via SetSize on
         // the first frames (the surface later snaps to stream-native
         // on video params, so this is first-frame stability only).
-        width: 384,
-        height: 384,
+        width: _artworkOutputPx,
+        height: _artworkOutputPx,
         // CPU presentation on Linux: media_kit's H/W path renders in
         // an isolated EGL context shared with Flutter's ("H/W
         // rendering with isolated EGL context" in the log), and the
@@ -450,11 +468,11 @@ class AnimatedArtworkSession extends ChangeNotifier {
         // the D3D11 interop entirely. `--dart-define=LW_ARTWORK_HW=1`
         // restores the H/W path for comparison.
         enableHardwareAcceleration: _artworkHardwarePresent,
-        // Software decode only: media_kit defaults hwdec=auto, which on
-        // Linux+Mesa tries VA-API dmabuf interop with vo=libmpv and
-        // yields zero frames (still never fades; Windows D3D11-copy is
-        // unaffected). These clips are trivial for CPU.
-        hwdec: 'no',
+        // Not `auto`: on Linux+Mesa that tries VA-API dmabuf interop with
+        // vo=libmpv and yields zero frames. Windows decodes on the GPU in
+        // copy-back mode (see [_artworkHwdec]); 1280px clips in software
+        // cost a measurable slice of a core for the whole session.
+        hwdec: _artworkHwdec,
       ),
     );
     _bindLoopWatchdogs(player);
@@ -570,10 +588,20 @@ class AnimatedArtworkSession extends ChangeNotifier {
         await dyn.setProperty('cache', 'yes');
       } catch (_) {}
       try {
-        await dyn.setProperty('demuxer-max-bytes', '${16 * 1024 * 1024}');
+        await dyn.setProperty('demuxer-max-bytes', '${2 * 1024 * 1024}');
       } catch (_) {}
       try {
-        await dyn.setProperty('demuxer-max-back-bytes', '${16 * 1024 * 1024}');
+        await dyn.setProperty('demuxer-max-back-bytes', '${2 * 1024 * 1024}');
+      } catch (_) {}
+      try {
+        // Downscale decode to 480px and cap to 24fps via fast_bilinear filter:
+        // Artwork clips are displayed at ~400px. Decoding 1080p/1280p at 60fps
+        // in software on CPU copies ~280 MB/s of raw pixel buffer memory.
+        // Capping to 480px@24fps drops pixel throughput by ~90%, slashing CPU and RAM.
+        // Scale straight to the pre-allocated texture edge (was 480, then
+        // scaled again to the 384px texture: two passes per frame).
+        await dyn.setProperty('vf',
+            'scale=$_artworkOutputPx:-2:flags=fast_bilinear,fps=24');
       } catch (_) {}
       try {
         await dyn.setProperty('loop-file', 'inf');

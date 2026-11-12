@@ -7,11 +7,12 @@ import 'package:flutter/foundation.dart';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:palette_generator/palette_generator.dart';
 
+import '../../core/artwork/artwork_cache.dart';
 import '../../core/storage/prefs.dart';
+import '../../features/player/playback_service.dart';
 import '../theme/haze.dart';
 import '../theme/tokens.dart';
 
@@ -471,8 +472,15 @@ ArtworkPalette _paletteFromRegions({
 }
 
 Future<ui.Image> _decodeArtwork(String url) {
-  final provider =
-      CachedNetworkImageProvider(url, maxWidth: 192, maxHeight: 192);
+  // Decode-time downsample of the shared on-disk original. The old
+  // provider `maxWidth` resized ON DISK: a second, PNG re-encoded file per
+  // cover that also burned a slot of the 200-object cache.
+  final provider = ResizeImage(
+    CachedNetworkImageProvider(url, cacheManager: ArtworkCache.instance),
+    width: 192,
+    height: 192,
+    policy: ResizeImagePolicy.fit,
+  );
   final completer = Completer<ui.Image>();
   final stream = provider.resolve(const ImageConfiguration());
   late final ImageStreamListener listener;
@@ -744,7 +752,7 @@ class _PaletteTask {
 
 /// Fixed-size pool over [_PaletteWorker]s with a FIFO queue.
 class _PalettePool {
-  static const int _maxWorkers = 4;
+  static const int _maxWorkers = 1;
 
   final List<_PaletteWorker> _workers = [];
   final List<_PaletteTask> _queue = [];
@@ -802,8 +810,13 @@ int get palettePoolFallbacks => _PaletteWorker._fallbacks;
 final artworkPaletteProvider =
     FutureProvider.autoDispose.family<ArtworkPalette, String>((ref, url) async {
   if (url.isEmpty) return ArtworkPalette.fallback;
-  final cached = _paletteLruCache[url];
-  if (cached != null) return cached;
+  // Real LRU: a hit moves to the most-recent end (insertion order), so
+  // the current track's palette is never the next one evicted.
+  final cached = _paletteLruCache.remove(url);
+  if (cached != null) {
+    _paletteLruCache[url] = cached;
+    return cached;
+  }
   _keepPaletteAlive(ref);
   ui.Image? image;
   try {
@@ -854,6 +867,10 @@ class _AuraTextures {
 final auraTexturesProvider =
     FutureProvider.autoDispose.family<_AuraTextures, String>((ref, url) async {
   if (url.isEmpty) throw StateError('empty artwork');
+  // Same timed keep-alive as the palette: closing Now Playing used to
+  // dispose these at once, so every reopen re-decoded, re-blurred and
+  // read back two textures behind a black stage.
+  _keepPaletteAlive(ref);
   final src = await _decodeArtwork(url);
   const out = 256;
   const rect = Rect.fromLTWH(0, 0, 256, 256);
@@ -931,13 +948,12 @@ final auraImageProvider =
   return textures.base;
 });
 
-/// Static ambient background (no animation).
+/// Ambient background.
 ///
-/// Fully static by design: no AnimationControllers, no tickers, no
-/// AnimatedBuilder, no per-frame CustomPaint repaints. Each stage paints
-/// exactly once per (artworkUrl, palette, theme) change, so RSS stays flat
-/// after first paint. The [cinematic] flag selects the static baked-aura
-/// stage vs the static palette-orb stage; both are still images.
+/// The non-cinematic palette-orb stage is static (paints once per
+/// artworkUrl/palette/theme change). The [cinematic] baked-aura stage
+/// drifts slowly via a 25 Hz Timer ([_AuraLayersState]) while music plays
+/// and holds still when paused, hidden or with reduced motion.
 class WaveAmbientMesh extends ConsumerWidget {
   final String artworkUrl;
   final bool isFullBleed;
@@ -1077,7 +1093,7 @@ class WaveAmbientMesh extends ConsumerWidget {
 /// Apple Music-inspired album cover background visualizer:
 /// Composites multiple slowly counter-rotating and orbiting blurred layers of
 /// the album cover with regional palette blooms.
-class _AppleArtworkAura extends ConsumerWidget {
+class _AppleArtworkAura extends ConsumerStatefulWidget {
   final String artworkUrl;
   final ArtworkPalette palette;
   final bool apple;
@@ -1089,16 +1105,36 @@ class _AppleArtworkAura extends ConsumerWidget {
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final asyncTextures = ref.watch(auraTexturesProvider(artworkUrl));
-    return asyncTextures.when(
-      loading: () => const ColoredBox(color: Color(0xFF0B0D11)),
-      error: (_, _) => const ColoredBox(color: Color(0xFF0B0D11)),
-      data: (textures) => _AuraLayers(
-        textures: textures,
-        palette: palette,
-        apple: apple,
-      ),
+  ConsumerState<_AppleArtworkAura> createState() => _AppleArtworkAuraState();
+}
+
+class _AppleArtworkAuraState extends ConsumerState<_AppleArtworkAura> {
+  /// URL whose textures are on screen. While the next cover's textures
+  /// bake, the previous ones keep painting (watched, so they stay alive)
+  /// instead of dropping to a black box.
+  String? _shownUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    final url = widget.artworkUrl;
+    final current = ref.watch(auraTexturesProvider(url));
+    var textures = current.valueOrNull;
+    if (textures != null) {
+      _shownUrl = url;
+    } else if (_shownUrl != null && _shownUrl != url && !current.hasError) {
+      textures = ref.watch(auraTexturesProvider(_shownUrl!)).valueOrNull;
+    }
+    // Paused playback holds the stage still: no frames at all.
+    final playing =
+        ref.watch(playbackServiceProvider.select((s) => s.isPlaying));
+    if (textures == null) {
+      return const ColoredBox(color: Color(0xFF0B0D11));
+    }
+    return _AuraLayers(
+      textures: textures,
+      palette: widget.palette,
+      apple: widget.apple,
+      playing: playing,
     );
   }
 }
@@ -1114,59 +1150,132 @@ class _AuraLayers extends StatefulWidget {
   final _AuraTextures textures;
   final ArtworkPalette palette;
   final bool apple;
+  final bool playing;
 
   const _AuraLayers({
     required this.textures,
     required this.palette,
     this.apple = false,
+    this.playing = true,
   });
 
   @override
   State<_AuraLayers> createState() => _AuraLayersState();
 }
 
-class _AuraLayersState extends State<_AuraLayers>
-    with SingleTickerProviderStateMixin {
-  Ticker? _ticker;
-  double _phase = 0.0;
+class _AuraLayersState extends State<_AuraLayers> {
+  /// Drives the phase at a fixed 25 Hz. Deliberately NOT a Ticker: a
+  /// Ticker schedules a frame on every vsync, and every frame composites
+  /// the whole window (60-165 Hz) even when the throttled tick skipped the
+  /// repaint. A Timer only requests the 25 frames/s it actually paints.
+  Timer? _timer;
+  final ValueNotifier<double> _phaseNotifier = ValueNotifier<double>(0.0);
+  final Stopwatch _clock = Stopwatch();
   Duration _lastTick = Duration.zero;
+  static const Duration _frameInterval = Duration(milliseconds: 40);
+
+  Size? _shaderSize;
+  ArtworkPalette? _shaderPalette;
+  ui.Shader? _appleVignetteShader;
+  ui.Shader? _tonalLinearShader;
+  ui.Shader? _tonalVignetteShader;
+  ui.Shader? _tonalBloomShader;
+
+  void _updateShaders(Size half, ArtworkPalette palette, bool apple) {
+    if (_shaderSize == half && _shaderPalette == palette) return;
+    _shaderSize = half;
+    _shaderPalette = palette;
+    final rect = Offset.zero & half;
+    final w = half.width;
+    final h = half.height;
+    final maxDim = math.max(w, h);
+
+    if (apple) {
+      _appleVignetteShader = const RadialGradient(
+        center: Alignment.center,
+        radius: 1.05,
+        colors: [
+          Color(0x00000000),
+          Color(0x00000000),
+          Color(0x47000000),
+        ],
+        stops: [0.0, 0.55, 1.0],
+      ).createShader(rect);
+    } else {
+      _tonalBloomShader = RadialGradient(
+        colors: [
+          palette.primary.withValues(alpha: 0.22),
+          palette.primary.withValues(alpha: 0.22 * 0.45),
+          const Color(0x00000000),
+        ],
+        stops: const [0.0, 0.48, 1.0],
+      ).createShader(Rect.fromCircle(
+        center: Offset(w * 0.30, h * 0.30),
+        radius: maxDim * 0.85,
+      ));
+
+      _tonalLinearShader = const LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          Color(0x00000000),
+          Color(0x00000000),
+          Color(0x66000000),
+          Color(0xB3000000),
+        ],
+        stops: [0.0, 0.38, 0.72, 1.0],
+      ).createShader(rect);
+
+      _tonalVignetteShader = const RadialGradient(
+        center: Alignment.center,
+        radius: 1.1,
+        colors: [
+          Color(0x00000000),
+          Color(0x00000000),
+          Color(0x4D000000),
+        ],
+        stops: [0.0, 0.62, 1.0],
+      ).createShader(rect);
+    }
+  }
 
   bool _shouldAnimate(BuildContext context) {
     final isTest =
         WidgetsBinding.instance.runtimeType.toString().contains('Test');
     if (isTest) return false;
+    if (!widget.playing) return false;
     final disableAnimations =
         MediaQuery.maybeOf(context)?.disableAnimations ?? false;
     if (disableAnimations) return false;
+    final tickerEnabled = TickerMode.valuesOf(context).enabled;
+    if (!tickerEnabled) return false;
     return WaveHazeScope.blurEnabled(context);
   }
 
   void _syncTicker(bool animate) {
     if (animate) {
-      _ticker ??= createTicker(_onTick);
-      if (!_ticker!.isActive) {
-        _lastTick = Duration.zero;
-        _ticker!.start();
-      }
+      if (_timer?.isActive ?? false) return;
+      _lastTick = Duration.zero;
+      _clock
+        ..reset()
+        ..start();
+      _timer = Timer.periodic(_frameInterval, (_) => _onTick(_clock.elapsed));
     } else {
-      _ticker?.stop();
+      _timer?.cancel();
+      _timer = null;
+      _clock.stop();
     }
   }
 
   void _onTick(Duration elapsed) {
-    // Throttle to ~30fps (33ms) since the blurred aura moves at a meditative
-    // pace (~45s per full revolution).
-    if (_lastTick != Duration.zero &&
-        (elapsed - _lastTick).inMilliseconds < 33) {
-      return;
-    }
+    if (!mounted) return;
     final dtMs = _lastTick == Duration.zero
-        ? 33
+        ? 40
         : (elapsed - _lastTick).inMilliseconds.clamp(1, 200);
     _lastTick = elapsed;
-    setState(() {
-      _phase = (_phase + (dtMs / 1000.0) * 0.14) % (math.pi * 200);
-    });
+    // Mutate ValueNotifier directly: repaint only, no rebuild.
+    _phaseNotifier.value =
+        (_phaseNotifier.value + (dtMs / 1000.0) * 0.14) % (math.pi * 200);
   }
 
   @override
@@ -1176,8 +1285,17 @@ class _AuraLayersState extends State<_AuraLayers>
   }
 
   @override
+  void didUpdateWidget(covariant _AuraLayers oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.playing != widget.playing) {
+      _syncTicker(_shouldAnimate(context));
+    }
+  }
+
+  @override
   void dispose() {
-    _ticker?.dispose();
+    _timer?.cancel();
+    _phaseNotifier.dispose();
     super.dispose();
   }
 
@@ -1190,6 +1308,7 @@ class _AuraLayersState extends State<_AuraLayers>
           return const SizedBox.expand();
         }
         final half = Size(size.width / 2, size.height / 2);
+        _updateShaders(half, widget.palette, widget.apple);
         return SizedBox.expand(
           child: FittedBox(
             fit: BoxFit.cover,
@@ -1198,13 +1317,17 @@ class _AuraLayersState extends State<_AuraLayers>
               child: RepaintBoundary(
                 child: CustomPaint(
                   isComplex: false,
-                  willChange: _ticker?.isActive ?? false,
+                  willChange: _timer?.isActive ?? false,
                   painter: _AuraPainter(
                     textures: widget.textures,
                     palette: widget.palette,
                     canvasSize: half,
-                    phase: _phase,
+                    phaseNotifier: _phaseNotifier,
                     apple: widget.apple,
+                    appleVignetteShader: _appleVignetteShader,
+                    tonalBloomShader: _tonalBloomShader,
+                    tonalLinearShader: _tonalLinearShader,
+                    tonalVignetteShader: _tonalVignetteShader,
                   ),
                 ),
               ),
@@ -1220,18 +1343,29 @@ class _AuraPainter extends CustomPainter {
   final _AuraTextures textures;
   final ArtworkPalette palette;
   final Size canvasSize;
-  final double phase;
-
-  /// Apple Music stage ([_paintApple]) instead of the calm tonal one.
+  final ValueListenable<double> phaseNotifier;
   final bool apple;
+  final ui.Shader? appleVignetteShader;
+  final ui.Shader? tonalBloomShader;
+  final ui.Shader? tonalLinearShader;
+  final ui.Shader? tonalVignetteShader;
+
+  static final ColorFilter _appleBaseFilter = _alphaFilter(0.92, 1.15);
+  static final ColorFilter _appleSpriteFilter = _alphaFilter(0.80, 1.25);
+  static final ColorFilter _tonalBaseFilter = _alphaFilter(0.62, 0.72);
+  static final ColorFilter _tonalSpriteFilter = _alphaFilter(0.38, 0.80);
 
   _AuraPainter({
     required this.textures,
     required this.palette,
     required this.canvasSize,
-    required this.phase,
+    required this.phaseNotifier,
     this.apple = false,
-  });
+    this.appleVignetteShader,
+    this.tonalBloomShader,
+    this.tonalLinearShader,
+    this.tonalVignetteShader,
+  }) : super(repaint: phaseNotifier);
 
   /// Alpha plus saturation in one matrix (1 = as baked, <1 = more muted).
   static ColorFilter _alphaFilter(double alpha, [double saturation = 1.0]) {
@@ -1253,8 +1387,7 @@ class _AuraPainter extends CustomPainter {
     required Offset center,
     required double diameter,
     required double angle,
-    required double alpha,
-    double saturation = 1.0,
+    required ColorFilter filter,
   }) {
     final src = Rect.fromLTWH(
       0,
@@ -1270,7 +1403,7 @@ class _AuraPainter extends CustomPainter {
     final paint = Paint()
       ..isAntiAlias = true
       ..filterQuality = FilterQuality.low
-      ..colorFilter = _alphaFilter(alpha, saturation);
+      ..colorFilter = filter;
     canvas.save();
     canvas.translate(center.dx, center.dy);
     canvas.rotate(angle);
@@ -1286,17 +1419,19 @@ class _AuraPainter extends CustomPainter {
     required Color color,
     required double alpha,
     BlendMode blendMode = BlendMode.srcOver,
+    ui.Shader? cachedShader,
   }) {
     final paint = Paint()
       ..blendMode = blendMode
-      ..shader = RadialGradient(
-        colors: [
-          color.withValues(alpha: alpha.clamp(0.0, 1.0)),
-          color.withValues(alpha: (alpha * 0.45).clamp(0.0, 1.0)),
-          color.withValues(alpha: 0.0),
-        ],
-        stops: const [0.0, 0.48, 1.0],
-      ).createShader(Rect.fromCircle(center: center, radius: radius));
+      ..shader = cachedShader ??
+          RadialGradient(
+            colors: [
+              color.withValues(alpha: alpha.clamp(0.0, 1.0)),
+              color.withValues(alpha: (alpha * 0.45).clamp(0.0, 1.0)),
+              color.withValues(alpha: 0.0),
+            ],
+            stops: const [0.0, 0.48, 1.0],
+          ).createShader(Rect.fromCircle(center: center, radius: radius));
     canvas.drawRect(rect, paint);
   }
 
@@ -1310,7 +1445,7 @@ class _AuraPainter extends CustomPainter {
   /// foliage…) to different corners and orbit slowly. Then a uniform dim
   /// and a soft vignette. Same cost as the tonal stage: 5 drawImageRects at
   /// half resolution, no per-frame filters or layers.
-  void _paintApple(Canvas canvas, Size size) {
+  void _paintApple(Canvas canvas, Size size, double phase) {
     final w = size.width;
     final h = size.height;
     final rect = Offset.zero & size;
@@ -1327,8 +1462,7 @@ class _AuraPainter extends CustomPainter {
       center: Offset(w * 0.50, h * 0.50),
       diameter: maxDim * 1.7,
       angle: phase * 0.08,
-      alpha: 0.92,
-      saturation: 1.15,
+      filter: _appleBaseFilter,
     );
 
     // (x, y, spin rate, phase offset): spread so each corner gets its own
@@ -1349,8 +1483,7 @@ class _AuraPainter extends CustomPainter {
         ),
         diameter: maxDim * 1.05,
         angle: phase * spin + k,
-        alpha: 0.80,
-        saturation: 1.25,
+        filter: _appleSpriteFilter,
       );
     }
 
@@ -1358,10 +1491,8 @@ class _AuraPainter extends CustomPainter {
     // range white text needs. Pale covers get more from [_AppleScrim].
     canvas.drawRect(rect, Paint()..color = const Color(0x4D000000));
 
-    canvas.drawRect(
-      rect,
-      Paint()
-        ..shader = const RadialGradient(
+    final vignetteShader = appleVignetteShader ??
+        const RadialGradient(
           center: Alignment.center,
           radius: 1.05,
           colors: [
@@ -1370,15 +1501,17 @@ class _AuraPainter extends CustomPainter {
             Color(0x47000000),
           ],
           stops: [0.0, 0.55, 1.0],
-        ).createShader(rect),
-    );
+        ).createShader(rect);
+
+    canvas.drawRect(rect, Paint()..shader = vignetteShader);
   }
 
   @override
   void paint(Canvas canvas, Size size) {
     if (size.width <= 0 || size.height <= 0) return;
+    final phase = phaseNotifier.value;
     if (apple) {
-      _paintApple(canvas, size);
+      _paintApple(canvas, size, phase);
       return;
     }
     final w = size.width;
@@ -1403,8 +1536,7 @@ class _AuraPainter extends CustomPainter {
       center: Offset(w * 0.50, h * 0.42),
       diameter: maxDim * 2.3,
       angle: phase * 0.10,
-      alpha: 0.62,
-      saturation: 0.72,
+      filter: _tonalBaseFilter,
     );
     // One feathered sprite drifting very slowly gives the stage life.
     _drawRotatedTexture(
@@ -1416,8 +1548,7 @@ class _AuraPainter extends CustomPainter {
       ),
       diameter: maxDim * 1.9,
       angle: -phase * 0.20,
-      alpha: 0.38,
-      saturation: 0.80,
+      filter: _tonalSpriteFilter,
     );
 
     // Soft light source, upper left of centre (where the cover sits).
@@ -1428,13 +1559,12 @@ class _AuraPainter extends CustomPainter {
       radius: maxDim * 0.85,
       color: palette.primary,
       alpha: 0.22,
+      cachedShader: tonalBloomShader,
     );
 
     // Depth: light at the top, falling away to near-black at the bottom.
-    canvas.drawRect(
-      rect,
-      Paint()
-        ..shader = const LinearGradient(
+    final linearShader = tonalLinearShader ??
+        const LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
           colors: [
@@ -1444,14 +1574,13 @@ class _AuraPainter extends CustomPainter {
             Color(0xB3000000),
           ],
           stops: [0.0, 0.38, 0.72, 1.0],
-        ).createShader(rect),
-    );
+        ).createShader(rect);
+
+    canvas.drawRect(rect, Paint()..shader = linearShader);
 
     // Gentle vignette so the edges settle into the page.
-    canvas.drawRect(
-      rect,
-      Paint()
-        ..shader = const RadialGradient(
+    final vignetteShader = tonalVignetteShader ??
+        const RadialGradient(
           center: Alignment.center,
           radius: 1.1,
           colors: [
@@ -1460,15 +1589,16 @@ class _AuraPainter extends CustomPainter {
             Color(0x4D000000),
           ],
           stops: [0.0, 0.62, 1.0],
-        ).createShader(rect),
-    );
+        ).createShader(rect);
+
+    canvas.drawRect(rect, Paint()..shader = vignetteShader);
   }
   @override
   bool shouldRepaint(covariant _AuraPainter old) {
     return old.textures != textures ||
         old.palette != palette ||
         old.canvasSize != canvasSize ||
-        old.phase != phase ||
+        old.phaseNotifier != phaseNotifier ||
         old.apple != apple;
   }
 }
