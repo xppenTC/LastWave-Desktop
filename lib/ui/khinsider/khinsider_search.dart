@@ -68,6 +68,10 @@ class _KhBrowseState extends ConsumerState<_KhBrowse> {
   bool _hasNext = true;
   bool _loading = false;
   Object? _error;
+  // A Wrap builds every card: "All-time top 1000" built 1000 at once and
+  // fetched 1000 covers. Show them in slices.
+  int _shown = _slice;
+  static const _slice = 60;
 
   @override
   void initState() {
@@ -82,6 +86,10 @@ class _KhBrowseState extends ConsumerState<_KhBrowse> {
       _page = 0;
       _hasNext = true;
       _error = null;
+      // The old list's request may still run; its finally skips a list that
+      // changed, so without this the new list never loaded.
+      _loading = false;
+      _shown = _slice;
     });
     _loadMore();
   }
@@ -178,7 +186,8 @@ class _KhBrowseState extends ConsumerState<_KhBrowse> {
         const SizedBox(height: 18),
         Text(_list.title, style: WaveType.sectionTitle),
         const SizedBox(height: 10),
-        if (_albums.isNotEmpty) _KhAlbumGrid(albums: _albums),
+        if (_albums.isNotEmpty)
+          _KhAlbumGrid(albums: _albums.take(_shown).toList()),
         if (_error != null)
           WaveError(
             title: 'Could not load KHInsider',
@@ -196,11 +205,16 @@ class _KhBrowseState extends ConsumerState<_KhBrowse> {
             title: 'No albums here',
             subtitle: 'KHInsider lists nothing for this choice.',
           )
-        else if (_hasNext)
+        else if (_shown < _albums.length || _hasNext)
           Padding(
             padding: const EdgeInsets.only(top: 14),
             child: WaveButton(
-              onPressed: _loadMore,
+              onPressed: _shown < _albums.length
+                  ? () => setState(() => _shown += _slice)
+                  : () {
+                      _shown += _slice;
+                      _loadMore();
+                    },
               child: const Text('Load more'),
             ),
           ),

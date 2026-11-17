@@ -38,11 +38,21 @@ PlayableTrack khPlayable(KhAlbum album, KhTrack t) => PlayableTrack(
 );
 
 /// Saves a KHInsider track as `<album>/NN. Title.<flac|mp3>`, tagged.
-void downloadKhTrack(WidgetRef ref, PlayableTrack t, {int number = 0}) {
-  final client = ref.read(khInsiderClientProvider);
-  ref
-      .read(downloadManagerProvider.notifier)
-      .downloadTrack(
+void downloadKhTrack(WidgetRef ref, PlayableTrack t, {int number = 0}) =>
+    downloadKh(
+      ref.read(downloadManagerProvider.notifier),
+      ref.read(khInsiderClientProvider),
+      t,
+      number: number,
+    );
+
+/// [downloadKhTrack] without a ref, finishing when the file is saved.
+Future<void> downloadKh(
+  DownloadManager manager,
+  KhInsiderClient client,
+  PlayableTrack t, {
+  int number = 0,
+}) => manager.downloadTrack(
         title: t.title,
         artist: t.artist,
         album: t.album,
@@ -54,7 +64,6 @@ void downloadKhTrack(WidgetRef ref, PlayableTrack t, {int number = 0}) {
             : t.title,
         trackNumber: number,
       );
-}
 
 /// A KHInsider album: cover + platforms / year / type, FLAC or MP3, Play,
 /// Shuffle, Download, Add to playlist, then the track table.
@@ -106,12 +115,22 @@ class _WaveKhAlbumPageState extends ConsumerState<WaveKhAlbumPage> {
           album: album.name,
           durationSeconds: t.durationSeconds ?? 0,
           playbackUrl: KhInsiderParser.playbackUri(t.pagePath),
+          addedAtMillis: DateTime.now().millisecondsSinceEpoch,
         ),
     ];
+    // One write: addTrack per track re-read every playlist once per track.
     Future<void> addAll(int id) async {
-      for (final t in stored) {
-        await library.addTrack(id, t);
-      }
+      final current = ref
+          .read(playlistRepositoryProvider)
+          .firstWhere((p) => p.id == id)
+          .tracks;
+      String key(StoredTrack t) =>
+          '${t.name.toLowerCase()}|${t.artist.toLowerCase()}';
+      final seen = current.map(key).toSet();
+      await library.replaceTracks(id, [
+        ...current,
+        ...stored.where((t) => seen.add(key(t))),
+      ]);
     }
 
     final userPlaylists = ref
@@ -193,13 +212,22 @@ class _WaveKhAlbumPageState extends ConsumerState<WaveKhAlbumPage> {
               : () => _play(album, List.of(order)..shuffle(), 0),
           onDownload: order.isEmpty
               ? null
-              : () {
-                  for (final t in order) {
-                    downloadKhTrack(
-                      ref,
-                      khPlayable(album, t),
-                      number: t.number ?? 0,
-                    );
+              : () async {
+                  // Three at a time: hundreds of FLACs at once each held whole
+                  // in memory, and asked KHInsider for every page together.
+                  // ref read before the awaits: the page may close meanwhile.
+                  final manager = ref.read(downloadManagerProvider.notifier);
+                  final client = ref.read(khInsiderClientProvider);
+                  for (var i = 0; i < order.length; i += 3) {
+                    await Future.wait([
+                      for (final t in order.skip(i).take(3))
+                        downloadKh(
+                          manager,
+                          client,
+                          khPlayable(album, t),
+                          number: t.number ?? 0,
+                        ).catchError((_) {}),
+                    ]);
                   }
                 },
           overflowItems: order.isEmpty ? const [] : _addAlbumToPlaylist(album),

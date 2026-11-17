@@ -59,13 +59,22 @@ class _StaleFile implements Exception {}
 
 class DriveSyncController extends StateNotifier<DriveSyncState> {
   final Ref _ref;
-  final Dio _http = Dio();
+  // Without timeouts a connection frozen mid-transfer (sleep, Wi-Fi change)
+  // kept "Syncing..." until restart. Long send/receive: the file can be MBs.
+  final Dio _http = Dio(
+    BaseOptions(
+      connectTimeout: const Duration(seconds: 15),
+      receiveTimeout: const Duration(seconds: 60),
+      sendTimeout: const Duration(seconds: 60),
+    ),
+  );
   String? _accessToken;
   DateTime _accessExpiry = DateTime.fromMillisecondsSinceEpoch(0);
   Timer? _debounce;
   Timer? _periodic;
   ProviderSubscription<List<SavedPlaylist>>? _playlistWatch;
   bool _started = false;
+  bool _ownRefresh = false;
 
   DriveSyncController(this._ref)
     : super(DriveSyncState(available: AppEnv.googleClientId.isNotEmpty));
@@ -151,6 +160,8 @@ class DriveSyncController extends StateNotifier<DriveSyncState> {
     _playlistWatch = null;
     _accessToken = null;
     await _store.writeSecret(_tokenKey, null);
+    // The next account's file is another library: start it from a union.
+    _db.kvSet(driveSyncBaseKey, '');
     state = DriveSyncState(available: state.available);
   }
 
@@ -168,9 +179,14 @@ class DriveSyncController extends StateNotifier<DriveSyncState> {
           if (attempt >= 2) rethrow;
         }
       }
-      _ref.read(playlistRepositoryProvider.notifier)
-        ..refresh()
-        ..collapseDuplicateLikedRows();
+      _ownRefresh = true;
+      try {
+        _ref.read(playlistRepositoryProvider.notifier)
+          ..refresh()
+          ..collapseDuplicateLikedRows();
+      } finally {
+        _ownRefresh = false;
+      }
       state = state.copyWith(syncing: false, lastSync: DateTime.now());
     } catch (e) {
       state = state.copyWith(
@@ -188,12 +204,19 @@ class DriveSyncController extends StateNotifier<DriveSyncState> {
         'spaces': 'appDataFolder',
         'q': "name = '$driveFileName'",
         'fields': 'files(id,version)',
+        // Two devices creating the file at once leave two: all pick the oldest.
+        'orderBy': 'createdTime',
       },
     );
     final files = (found['files'] as List?) ?? const [];
     if (files.isEmpty) {
       // First device to sync: the file starts as this library.
-      await syncBackup(_db, buildBackup(_db), _createFile);
+      await syncBackup(
+        _db,
+        buildBackup(_db),
+        _createFile,
+        baseKey: driveSyncBaseKey,
+      );
       return;
     }
     final id = files.first['id'] as String;
@@ -209,7 +232,7 @@ class DriveSyncController extends StateNotifier<DriveSyncState> {
       // shortcut: a write landing between this check and the upload is
       // still overwritten; Drive v3 has no conditional upload.
       await _upload(id, merged);
-    });
+    }, baseKey: driveSyncBaseKey);
   }
 
   void _arm() {
@@ -219,7 +242,9 @@ class DriveSyncController extends StateNotifier<DriveSyncState> {
     _playlistWatch = _ref.listen<List<SavedPlaylist>>(
       playlistRepositoryProvider,
       (_, _) {
-        if (state.syncing) return; // our own refresh after a sync
+        // Only our own refresh is skipped: an edit made during the upload
+        // still schedules the sync the error message promises.
+        if (_ownRefresh) return;
         _debounce?.cancel();
         _debounce = Timer(const Duration(seconds: 30), syncNow);
       },

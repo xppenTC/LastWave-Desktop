@@ -570,7 +570,12 @@ class DownloadManager extends StateNotifier<List<DownloadEntry>> {
               )
               .timeout(const Duration(seconds: 20),
                   onTimeout: () => const LyricsResult.empty()),
-        _fetchCoverBytes(title, artist, artworkUrl),
+        // No album scan: a store or YouTube search by title + game name
+        // would tag the file with an unrelated cover.
+        if (directSource != null && artworkUrl.trim().isEmpty)
+          Future<({Uint8List bytes, String mime})?>.value(null)
+        else
+          _fetchCoverBytes(title, artist, artworkUrl),
       ]);
       final lyrics = fetched[0] as LyricsResult;
       final cover =

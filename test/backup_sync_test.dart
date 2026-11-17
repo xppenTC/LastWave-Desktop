@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lastwave_desktop/features/backup/backup_sync.dart';
@@ -244,5 +245,56 @@ void main() {
       remoteEx: [ex('a|x'), ex('b|x'), ex('d|x')],
     );
     expect(m.exclusions.map((e) => e['trackKey']), ['b|x', 'd|x', 'c|x']);
+  });
+
+  test('a file copy without a link gets ours back', () {
+    const link = 'khinsider://track?page=%2Fx.mp3';
+    final m = mergeLibraries(
+      basePlaylists: [pl(1, [t('a', link)])],
+      baseExclusions: const [],
+      localPlaylists: [pl(1, [t('a', link)])],
+      localExclusions: const [],
+      remotePlaylists: [pl(1, [t('a')])],
+      remoteExclusions: const [],
+    );
+    expect(tracksOf(m.playlists.single).single['url'], link);
+  });
+
+  test('linear track order matches the old one', () {
+    // The old quadratic version, kept here as the reference.
+    List<Map<String, dynamic>> old(
+      List<Map<String, dynamic>> merged,
+      List<Map<String, dynamic>> local,
+      List<Map<String, dynamic>> remote,
+    ) {
+      final byKey = {for (final t in merged) trackKey(t): t};
+      final outKeys = <String>[];
+      for (final k in local.map(trackKey)) {
+        if (byKey.containsKey(k) && !outKeys.contains(k)) outKeys.add(k);
+      }
+      var after = -1;
+      for (final k in remote.map(trackKey)) {
+        final at = outKeys.indexOf(k);
+        if (at >= 0) {
+          after = at;
+        } else if (byKey.containsKey(k)) {
+          outKeys.insert(++after, k);
+        }
+      }
+      return [for (final k in outKeys) byKey[k]!];
+    }
+
+    final random = Random(42);
+    List<Map<String, dynamic>> some() =>
+        List.generate(random.nextInt(12), (_) => t('t${random.nextInt(15)}'));
+    for (var i = 0; i < 2000; i++) {
+      final merged = some();
+      final local = some();
+      final remote = some();
+      expect(
+        inLocalOrder(merged, local, remote),
+        old(merged, local, remote),
+      );
+    }
   });
 }

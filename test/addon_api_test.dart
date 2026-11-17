@@ -461,6 +461,14 @@ void main() {
             artist: 'Jay Z',
           ),
           isNull);
+      // A one-letter artist is a name, not an initial: "V" is not "Vera Blue".
+      expect(
+          AddonApi.bestMatch(
+            [t('1', 'Sweater', 'Vera Blue')],
+            title: 'Sweater',
+            artist: 'V',
+          ),
+          isNull);
     });
 
     test('duration gate rejects far lengths', () {

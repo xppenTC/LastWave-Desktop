@@ -405,6 +405,7 @@ class KhInsiderParser {
     if (formats.isEmpty) formats.add('mp3');
 
     final tracks = <KhTrack>[];
+    final seen = <String, int>{};
     for (final row in table.querySelectorAll('tr')) {
       if (row.querySelector('th') != null || row.id == 'songlist_footer') {
         continue;
@@ -435,10 +436,15 @@ class KhInsiderParser {
         orElse: () => null,
       );
       final href = link.attributes['href']!;
+      // Same-named tracks (one per disc, often) shared one "name|artist" key:
+      // the second was never downloaded, and playlists and sync took them for
+      // one song. Same rule as the phone's KhInsiderParser.kt.
+      final title = _text(link);
+      final count = seen[title.toLowerCase()] = (seen[title.toLowerCase()] ?? 0) + 1;
       tracks.add(
         KhTrack(
           pagePath: href.startsWith('http') ? _pathOf(href) : href,
-          name: _text(link),
+          name: count == 1 ? title : '$title ($count)',
           number: number,
           disc: disc,
           durationSeconds: durationCell == null

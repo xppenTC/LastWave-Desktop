@@ -298,4 +298,38 @@ void main() {
     );
     expect(out['playlists'], isEmpty);
   });
+
+  test('this computer\'s Local songs stays here and out of the file', () async {
+    final db = AppDatabase.inMemory();
+    db.raw.execute(
+      'INSERT INTO saved_playlists (id, title, subtitle, mode, tracks_json, '
+      'created_at_millis, is_pinned) VALUES (?, ?, ?, ?, ?, ?, ?);',
+      [5, 'Local songs', '', 'local', '[]', 5, 0],
+    );
+    final file = await sync(db, phoneBackup());
+    expect(playlistsOf(db).where((p) => p.mode == 'local'), hasLength(1));
+    expect(file, isNot(contains('"mode": "local"')));
+  });
+
+  test('a KHInsider track added here keeps its link in the file', () {
+    const link =
+        'khinsider://track?page=%2Fgame-soundtracks%2Falbum%2Fa%2F1.mp3';
+    const track = StoredTrack(name: 'Theme', artist: 'Game', playbackUrl: link);
+    expect(trackToBackup(track)['url'], link);
+    expect(trackFromBackup(trackToBackup(track)).playbackUrl, link);
+  });
+
+  test('Drive keeps its own base: an old file there deletes nothing', () async {
+    final db = AppDatabase.inMemory();
+    await sync(db, phoneBackup());
+    final empty = jsonDecode(phoneBackup()) as Map<String, dynamic>;
+    empty['playlists'] = [];
+    await syncBackup(
+      db,
+      jsonEncode(empty),
+      (_) async {},
+      baseKey: driveSyncBaseKey,
+    );
+    expect(playlistsOf(db), isNotEmpty);
+  });
 }

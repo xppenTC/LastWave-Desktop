@@ -25,6 +25,10 @@ const _mobilePrefsKey = 'backup_mobile_prefs';
 /// The file as this computer last synced it: the merge's common ancestor.
 const _syncBaseKey = 'backup_sync_base';
 
+/// Drive's own base, apart from "Sync with file"'s: a file from another
+/// account or an old export is not read against the other target's base.
+const driveSyncBaseKey = 'backup_sync_base_drive';
+
 const _emptyPrefs = {
   'strings': {},
   'booleans': {},
@@ -69,10 +73,13 @@ Map<String, dynamic> trackToBackup(StoredTrack track) {
   final keepUrl =
       track.url.isNotEmpty &&
       (track.videoId.isEmpty || !track.url.startsWith('http'));
+  // A KHInsider track added here keeps its page link, or the phone gets a
+  // plain title to look up on YouTube.
+  final kh = KhInsiderParser.isPlaybackUri(track.playbackUrl);
   return {
     'name': track.name,
     'artist': track.artist,
-    'url': keepUrl ? track.url : track.videoId,
+    'url': kh ? track.playbackUrl : (keepUrl ? track.url : track.videoId),
     'image': track.artworkUrl.isEmpty ? null : track.artworkUrl,
     'album': track.album.isEmpty ? null : track.album,
   };
@@ -90,8 +97,10 @@ String _libraryState(AppDatabase db) => jsonEncode([
 
 String buildBackup(AppDatabase db) {
   final playlists = [
+    // This computer's own "Local songs" holds paths on this computer only.
     for (final r in db.raw.select(
-      'SELECT * FROM saved_playlists ORDER BY created_at_millis ASC;',
+      "SELECT * FROM saved_playlists WHERE mode != 'local' "
+      'ORDER BY created_at_millis ASC;',
     ))
       {
         'id': r['id'],
@@ -144,12 +153,13 @@ String buildBackup(AppDatabase db) {
 Future<BackupSummary> syncBackup(
   AppDatabase db,
   String content,
-  Future<void> Function(String merged) writeFile,
-) async {
+  Future<void> Function(String merged) writeFile, {
+  String baseKey = _syncBaseKey,
+}) async {
   final remote = _parse(content);
   Map<String, dynamic>? base;
   try {
-    base = _parse(db.kvGet(_syncBaseKey) ?? '');
+    base = _parse(db.kvGet(baseKey) ?? '');
   } catch (_) {}
   // What the merge starts from: if the library changes before it is
   // replaced (an edit during the upload), the replace is skipped.
@@ -202,7 +212,8 @@ Future<BackupSummary> syncBackup(
   final raw = db.raw;
   raw.execute('BEGIN;');
   try {
-    raw.execute('DELETE FROM saved_playlists;');
+    // Not this computer's "Local songs": the file never carries it.
+    raw.execute("DELETE FROM saved_playlists WHERE mode != 'local';");
     for (final p in merged.playlists.where(holdsPlaylist)) {
       final tracks = [
         for (final t in tracksOf(p))
@@ -243,7 +254,7 @@ Future<BackupSummary> syncBackup(
       );
     }
     db.kvSet(_mobilePrefsKey, jsonEncode(remote['prefs']));
-    db.kvSet(_syncBaseKey, output);
+    db.kvSet(baseKey, output);
     raw.execute('COMMIT;');
   } catch (e) {
     raw.execute('ROLLBACK;');

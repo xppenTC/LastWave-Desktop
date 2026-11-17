@@ -911,7 +911,9 @@ class AddonApi implements LosslessSource {
     // the catalog has "Unicorn On Ketamine" (the phone's matcher drops it).
     bool covers(Set<String> big, Set<String> small) => small.every((s) =>
         big.contains(s) ||
-        (s.length == 1 && big.any((w) => w.startsWith(s))));
+        // An initial only inside a longer name: a one-letter artist ("V")
+        // would otherwise cover any artist with a word starting with it.
+        (s.length == 1 && small.length > 1 && big.any((w) => w.startsWith(s))));
     return ta.isNotEmpty &&
         tb.isNotEmpty &&
         (covers(tb, ta) || covers(ta, tb));

@@ -120,9 +120,21 @@ Map<String, dynamic> _mergePlaylist(
     for (final t in baseTracks)
       if (keep(t) && !localKeys.contains(trackKey(t))) trackKey(t),
   };
+  // A file copy without a link gets ours back (desktops before this fix
+  // exported KHInsider tracks without one). Only the link: this app writes
+  // five fields, so its copy must not replace the phone's. Same rule as the
+  // phone's BackupMerge.kt.
+  final localByKey = {for (final t in localTracks) trackKey(t): t};
+  Map<String, dynamic> linked(Map<String, dynamic> t) {
+    final mine = '${localByKey[trackKey(t)]?['url'] ?? ''}';
+    return '${t['url'] ?? ''}'.isEmpty && mine.isNotEmpty
+        ? {...t, 'url': mine}
+        : t;
+  }
+
   final result = [
     for (final t in remoteTracks)
-      if (!removed.contains(trackKey(t))) t,
+      if (!removed.contains(trackKey(t))) linked(t),
   ];
   final present = result.map(trackKey).toSet();
   var front = 0;
@@ -142,7 +154,7 @@ Map<String, dynamic> _mergePlaylist(
   }
   merged['tracksJson'] = jsonEncode(
     base != null && !_reordered(baseTracks, remoteTracks)
-        ? _inLocalOrder(result, localTracks, remoteTracks)
+        ? inLocalOrder(result, localTracks, remoteTracks)
         : result,
   );
   return merged;
@@ -167,26 +179,43 @@ bool _reordered(
 
 /// [merged] in [local]'s order; a track only the file has follows the one
 /// before it there.
-List<Map<String, dynamic>> _inLocalOrder(
+List<Map<String, dynamic>> inLocalOrder(
   List<Map<String, dynamic>> merged,
   List<Map<String, dynamic>> local,
   List<Map<String, dynamic>> remote,
 ) {
   final byKey = {for (final t in merged) trackKey(t): t};
-  final outKeys = <String>[];
+  // A linked list (key -> next key): inserting after a known track is O(1),
+  // where indexOf + insert on a list froze the UI on 10 000-track playlists.
+  final next = <String, String?>{};
+  String? head;
+  String? tail;
   for (final k in local.map(trackKey)) {
-    if (byKey.containsKey(k) && !outKeys.contains(k)) outKeys.add(k);
+    if (!byKey.containsKey(k) || next.containsKey(k)) continue;
+    if (tail == null) {
+      head = k;
+    } else {
+      next[tail] = k;
+    }
+    next[k] = null;
+    tail = k;
   }
-  var after = -1;
+  String? after;
   for (final k in remote.map(trackKey)) {
-    final at = outKeys.indexOf(k);
-    if (at >= 0) {
-      after = at;
+    if (next.containsKey(k)) {
+      after = k;
     } else if (byKey.containsKey(k)) {
-      outKeys.insert(++after, k);
+      if (after == null) {
+        next[k] = head;
+        head = k;
+      } else {
+        next[k] = next[after];
+        next[after] = k;
+      }
+      after = k;
     }
   }
-  return [for (final k in outKeys) byKey[k]!];
+  return [for (var k = head; k != null; k = next[k]) byKey[k]!];
 }
 
 List<String> _visibleKeys(
