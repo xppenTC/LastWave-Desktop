@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lastwave_desktop/features/automix/audio_analysis.dart';
-import 'package:lastwave_desktop/features/automix/beat_mix_planner.dart';
+import 'package:lastwave_desktop/features/automix/dj_mix_planner.dart';
 
 const sr = 11025;
 
@@ -68,7 +68,7 @@ void main() {
       final pcm = Int16List.fromList(
           List.generate(sr * 30, (_) => ((r.nextDouble() * 2 - 1) * 8000).round()));
       final a = analyzePcm(pcm, sr);
-      expect(a.hasBeat && a.confidence >= BeatMixPlanner.minConfidence, isFalse);
+      expect(a.hasBeat && a.confidence >= 0.2, isFalse);
     });
 
     test('json round trip', () {
@@ -79,93 +79,157 @@ void main() {
     });
   });
 
-  group('planner', () {
+  group('dj planner', () {
+    // Outgoing: last minute of a 200 s song whose sound ends 6 s early.
     final tail = analyzePcm(drums(bpm: 124, seconds: 60, tail: 6), sr,
         offsetSeconds: 140);
-    final head = analyzePcm(drums(bpm: 128, seconds: 60, intro: 2.2), sr);
+    // Incoming: starts with 1 s of silence.
+    final head = analyzePcm(drums(bpm: 128, seconds: 60, intro: 1), sr);
 
-    test('beat-matches close tempi on downbeats, before the silent tail', () {
-      final p = BeatMixPlanner.plan(
+    DjMixPlan planFor({
+      int bars = 8,
+      bool allowTempo = true,
+      TrackAnalysis? inc,
+      double outDur = 200,
+    }) =>
+        DjMixPlanner.plan(
+          outgoingTail: tail,
+          incomingHead: inc ?? head,
+          outgoingDuration: outDur,
+          incomingDuration: 180,
+          bars: bars,
+          allowTempo: allowTempo,
+        )!;
+
+    test('nothing is cut: ends on the last sound, incoming from its start', () {
+      final p = planFor();
+      expect(p.style, DjMixStyle.beatmatch);
+      expect(p.rate, closeTo(124 / 128, 0.004));
+      // Starts on an outgoing downbeat and runs to the song's last sound.
+      expect(tail.downbeats, contains(p.mixOutStart));
+      expect(p.mixOutEnd, closeTo(tail.contentEnd, 0.05));
+      final bar = 4 * 60 / 124;
+      expect(p.blendSec, greaterThanOrEqualTo(8 * bar - 0.05));
+      expect(p.blendSec, lessThan(9 * bar + 0.05));
+      // The incoming song starts at its first downbeat, right after the
+      // silence: nothing of it is skipped.
+      expect(head.downbeats, contains(p.incomingCue));
+      expect(p.incomingCue, lessThan(1.6));
+    });
+
+    test('16 bars at a quick tempo; a slow one drops to 8 within 24 s', () {
+      final fast = analyzePcm(drums(bpm: 170, seconds: 60, tail: 6), sr,
+          offsetSeconds: 140);
+      final p16 = DjMixPlanner.plan(
+        outgoingTail: fast,
+        incomingHead: analyzePcm(drums(bpm: 168, seconds: 60, intro: 1), sr),
+        outgoingDuration: 200,
+        incomingDuration: 180,
+        bars: 16,
+      )!;
+      expect(p16.bars, 16);
+      // 16 bars at 124 BPM would be 31 s: too long, 8 bars instead.
+      expect(planFor(bars: 16).bars, 8);
+    });
+
+    test('a short song keeps its body: at most 20% of it is blended', () {
+      expect(
+          DjMixPlanner.plan(
+            outgoingTail: tail,
+            incomingHead: head,
+            outgoingDuration: 60,
+            incomingDuration: 180,
+            bars: 8,
+          ),
+          isNull);
+    });
+
+    test('a jump past the mix point re-plans from there, on a downbeat', () {
+      final normal = planFor();
+      final late = DjMixPlanner.plan(
         outgoingTail: tail,
         incomingHead: head,
         outgoingDuration: 200,
         incomingDuration: 180,
-        maxOverlap: 20,
+        bars: 8,
+        earliestStart: normal.mixOutStart - 8,
       )!;
-      expect(p.beatMatched, isTrue);
-      expect(p.rate, closeTo(124 / 128, 0.003));
-      expect(p.beats, 32);
-      expect(tail.downbeats, contains(p.mixOutStart));
-      expect(head.downbeats, contains(p.incomingCue));
-      expect(p.mixOutEnd, lessThanOrEqualTo(tail.contentEnd + 0.02));
-      expect(p.incomingCue, greaterThanOrEqualTo(2.2 - 0.08));
-      // Incoming downbeats land on outgoing beats across the blend.
-      for (var k = 0; k <= 32; k += 4) {
-        final outBeat = p.mixOutStart + k * tail.beatPeriod;
-        final inBeat = p.incomingCue + k * head.beatPeriod;
-        expect(p.expectedIncoming(outBeat), closeTo(inBeat, 0.03));
+      expect(tail.downbeats, contains(late.mixOutStart));
+      expect(late.mixOutEnd, closeTo(tail.contentEnd, 0.05));
+      // Too late even for 8 bars: no plan (the plain end fade takes over).
+      expect(
+          DjMixPlanner.plan(
+            outgoingTail: tail,
+            incomingHead: head,
+            outgoingDuration: 200,
+            incomingDuration: 180,
+            bars: 8,
+            earliestStart: tail.contentEnd - 5,
+          ),
+          isNull);
+    });
+
+    test('a 10% tempo gap is blended at both songs own speed, not stretched',
+        () {
+      final far = analyzePcm(drums(bpm: 112, seconds: 60, intro: 2), sr);
+      final p = planFor(inc: far);
+      expect(p.style, DjMixStyle.filter);
+      expect(p.rate, 1.0);
+      expect(p.mixOutEnd, closeTo(tail.contentEnd, 0.05));
+    });
+
+    test('no tempo change when pitch shifting is on', () {
+      final p = planFor(allowTempo: false);
+      expect(p.style, DjMixStyle.filter);
+      expect(p.rate, 1.0);
+    });
+
+    test('handoff: outgoing keeps the floor, power stays level', () {
+      final (o10, i10) = DjMixPlanner.gains(beatmatched: true, progress: 0.1);
+      expect(o10, greaterThan(0.98));
+      expect(i10, lessThan(0.2));
+      final (o1, i1) = DjMixPlanner.gains(beatmatched: false, progress: 1);
+      expect(o1, closeTo(0, 1e-9));
+      expect(i1, closeTo(1, 1e-9));
+      for (var k = 0; k <= 10; k++) {
+        final (o, i) = DjMixPlanner.gains(beatmatched: false, progress: k / 10);
+        expect(o * o + i * i, closeTo(1, 1e-9));
       }
     });
 
-    test('far tempi fall back to a blend that still skips dead air', () {
-      final slow = analyzePcm(drums(bpm: 90, seconds: 60, intro: 4), sr);
-      final p = BeatMixPlanner.plan(
-        outgoingTail: tail,
-        incomingHead: slow,
-        outgoingDuration: 200,
-        incomingDuration: 180,
-        maxOverlap: 12,
-      )!;
-      expect(p.beatMatched, isFalse);
-      expect(p.rate, 1.0);
-      expect(p.mixOutEnd, closeTo(tail.contentEnd, 0.01));
-      expect(p.incomingCue, closeTo(3.95, 0.1));
+    test('bass handed over in the middle, treble eased across', () {
+      final start = DjMixPlanner.eqFor(beatmatched: true, bars: 8, progress: 0);
+      expect(start.outLow, closeTo(0, 1e-9));
+      expect(start.inLow, lessThan(-15));
+      final mid = DjMixPlanner.eqFor(beatmatched: true, bars: 8, progress: 0.62);
+      expect(mid.outLow, lessThan(-15));
+      final end = DjMixPlanner.eqFor(beatmatched: true, bars: 8, progress: 1);
+      expect(end.inLow, closeTo(0, 1e-9));
+      expect(end.inHigh, closeTo(0, 1e-9));
+      expect(end.outHigh, closeTo(-6.02, 0.01));
     });
 
-    test('tempo change is not used when pitch shifting is on', () {
-      final p = BeatMixPlanner.plan(
-        outgoingTail: tail,
-        incomingHead: head,
-        outgoingDuration: 200,
-        incomingDuration: 180,
-        maxOverlap: 20,
-        allowTempo: false,
-      )!;
-      expect(p.beatMatched, isFalse);
+    test('beat lock pulls a late, noisy deck onto the grid', () {
+      final p = planFor();
+      final lock = DjBeatLock(p, speed: 1);
+      final rnd = math.Random(3);
+      var out = p.triggerAt;
+      var inc = p.incomingStartAt + 0.09; // starts 90 ms late
+      var rate = p.rate;
+      var t = DateTime(2026);
+      const dt = 0.025;
+      for (var k = 0; k < 2400; k++) {
+        out += dt;
+        inc += dt * rate;
+        t = t.add(const Duration(milliseconds: 25));
+        lock.sample(out + (rnd.nextDouble() - 0.5) * 0.06,
+            inc + (rnd.nextDouble() - 0.5) * 0.06);
+        final a = lock.step(t);
+        if (a.seekTo != null) inc = a.seekTo!;
+        if (a.rate != null) rate = a.rate!;
+        expect((rate / p.rate - 1).abs(), lessThanOrEqualTo(0.0301));
+      }
+      expect((inc - p.expectedIncoming(out)).abs(), lessThan(0.02));
     });
-  });
-
-  test('beat lock pulls a late, noisy deck onto the grid', () {
-    final plan = BeatMixPlan(
-      mixOutStart: 100,
-      overlap: 15,
-      incomingCue: 5,
-      incomingStartAt: 2,
-      rate: 0.97,
-      beatMatched: true,
-      beats: 32,
-      reason: 'test',
-    );
-    final lock = BeatLock(plan, speed: 1);
-    final rnd = math.Random(7);
-    var now = DateTime(2026);
-    var out = plan.triggerAt;
-    var inc = plan.incomingStartAt - 0.4 * 0.97; // started 400 ms late
-    var rate = 0.97;
-    const dt = 0.025;
-    while (out < plan.mixOutEnd) {
-      out += dt;
-      inc += dt * rate;
-      now = now.add(const Duration(milliseconds: 25));
-      // ±30 ms clock jitter on each reading, like mpv's chunked clock.
-      lock.sample(out + (rnd.nextDouble() - 0.5) * 0.06,
-          inc + (rnd.nextDouble() - 0.5) * 0.06);
-      final a = lock.step(now);
-      if (a.seekTo != null) inc = a.seekTo!;
-      if (a.rate != null) rate = a.rate!;
-      // Never an audible wobble beyond ±3%.
-      expect((rate / 0.97 - 1).abs(), lessThanOrEqualTo(0.0301));
-    }
-    expect(lock.meanAudibleError, lessThan(0.015));
   });
 }

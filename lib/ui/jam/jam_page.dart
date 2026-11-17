@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/storage/prefs.dart';
+import '../../features/jam/jam_browser_stream.dart';
 import '../../features/jam/jam_client.dart';
 import '../components/artwork.dart';
 import '../components/buttons.dart';
@@ -30,6 +31,7 @@ class _WaveJamPageState extends ConsumerState<WaveJamPage> {
   final _chatFocus = FocusNode();
   final _chatScroll = ScrollController();
   bool _collaborative = true;
+  bool _allowBrowser = true;
   bool _copied = false;
   JamChatLine? _replyTo;
   Timer? _noticeTimer;
@@ -88,9 +90,9 @@ class _WaveJamPageState extends ConsumerState<WaveJamPage> {
     });
   }
 
+  /// Just the link: chat apps turn it into a preview card. It opens in the
+  /// browser, with a button to open the installed LastWave instead.
   Future<void> _copyInvite(String code) async {
-    // Just the link: chat apps turn it into a preview card and tapping it
-    // opens the installed LastWave.
     await Clipboard.setData(ClipboardData(
       text: ref.read(jamControllerProvider.notifier).inviteLink(code),
     ));
@@ -307,6 +309,21 @@ class _WaveJamPageState extends ConsumerState<WaveJamPage> {
                             : 'Only the host controls playback',
                       ),
                     ),
+                    const SizedBox(height: 10),
+                    ToggleSwitch(
+                      checked: _allowBrowser,
+                      onChanged: busy
+                          ? null
+                          : (v) => setState(() => _allowBrowser = v),
+                      content: const Text('Allow browser guests'),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Your invite link also plays in any browser, no app needed. '
+                      'They hear the YouTube version (~128 kbps) streamed from this PC.',
+                      style: WaveType.meta
+                          .copyWith(color: waveTextSecondary(context)),
+                    ),
                     const SizedBox(height: 14),
                     Align(
                       alignment: Alignment.centerLeft,
@@ -318,6 +335,7 @@ class _WaveJamPageState extends ConsumerState<WaveJamPage> {
                                 controller.createRoom(
                                   _name.text,
                                   collaborative: _collaborative,
+                                  browserGuests: _allowBrowser,
                                 );
                               },
                         child: Text(busy ? 'Connecting…' : 'Create room'),
@@ -523,6 +541,10 @@ class _WaveJamPageState extends ConsumerState<WaveJamPage> {
             ],
           ),
         ),
+        if (jam.isMainHost && jam.webGuests) ...[
+          const SizedBox(height: 14),
+          _browserGuests(context, jam),
+        ],
         const SizedBox(height: 14),
         _Card(
           child: Column(
@@ -644,6 +666,7 @@ class _WaveJamPageState extends ConsumerState<WaveJamPage> {
                           style: WaveType.body,
                         ),
                       ),
+                      if (person.isWeb) const _Pill(label: 'Browser'),
                       if (person.isHost)
                         _Pill(
                           label: jam.radio
@@ -664,6 +687,7 @@ class _WaveJamPageState extends ConsumerState<WaveJamPage> {
                       ],
                       if (!jam.radio &&
                           jam.isMainHost &&
+                          !person.isWeb &&
                           person.userId != jam.userId) ...[
                         const SizedBox(width: 8),
                         if (person.isCoHost)
@@ -684,6 +708,37 @@ class _WaveJamPageState extends ConsumerState<WaveJamPage> {
           ),
         ),
       ],
+    );
+  }
+
+  /// Host-only status: browser guests were chosen when the room was made.
+  Widget _browserGuests(BuildContext context, JamSnapshot jam) {
+    final web = ref.watch(jamBrowserStreamProvider);
+    final secondary = waveTextSecondary(context);
+    return _Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _Label('Browser guests · ${web.connected} listening'),
+          const SizedBox(height: 6),
+          Text(
+            'The invite link plays in any browser. Guests get the YouTube '
+            'version (~128 kbps) straight from this PC.',
+            style: WaveType.meta.copyWith(color: secondary),
+          ),
+          if (web.connected >= jamBrowserGuestWarnAt) ...[
+            const SizedBox(height: 8),
+            InfoBar(
+              title: Text(
+                '${web.connected} browser guests use about '
+                '${web.connected * 4} MB of your upload per song. '
+                'If they stutter, ask some to get the app.',
+              ),
+              severity: InfoBarSeverity.warning,
+            ),
+          ],
+        ],
+      ),
     );
   }
 

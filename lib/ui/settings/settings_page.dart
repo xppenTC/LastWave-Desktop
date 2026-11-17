@@ -3755,18 +3755,15 @@ class _TimedMixSettings extends ConsumerStatefulWidget {
 }
 
 class _TimedMixSettingsState extends ConsumerState<_TimedMixSettings> {
-  double? _dragSeconds;
-
   @override
   Widget build(BuildContext context) {
     final prefs = ref.watch(prefsProvider);
-    final seconds = _dragSeconds ?? prefs.autoMixSeconds.toDouble();
     return _Group(
       id: 'audio.automix',
       title: 'AutoMix',
       subtitle: prefs.autoMixEnabled
-          ? 'Timed dual-deck overlap, not beat-matched. Turns crossfade off.'
-          : 'Off. A timed mix between tracks, not a beat or key match.',
+          ? 'DJ-style blends on the beat. Turns crossfade off.'
+          : 'Off. Songs change without a blend.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -3780,45 +3777,26 @@ class _TimedMixSettingsState extends ConsumerState<_TimedMixSettings> {
             },
             title: 'Timed mix',
             subtitle: prefs.autoMixEnabled
-                ? 'Up to ${prefs.autoMixSeconds}s, beat-matched on the downbeat when tempos are close. Skips silent intros and outros; album tracks stay gapless.'
+                ? 'Blends each ending into the next song over ${prefs.autoMixBars} bars, on the beat, with a DJ bass handover. Nothing is cut. Album tracks stay gapless.'
                 : 'Gapless until you turn this on',
           ),
           if (prefs.autoMixEnabled) ...[
             const SizedBox(height: 6),
+            const Text('Blend length', style: WaveType.trackTitle),
+            const SizedBox(height: 8),
             Row(
               children: [
-                const Text('Transition length', style: WaveType.trackTitle),
-                const Spacer(),
-                Text(
-                  '${seconds.round()}s',
-                  style: WaveType.meta.copyWith(
-                    color: waveAccent(context),
-                    fontWeight: FontWeight.w600,
+                for (final bars in const [8, 16]) ...[
+                  if (bars != 8) const SizedBox(width: 8),
+                  Expanded(
+                    child: ToggleButton(
+                      checked: prefs.autoMixBars == bars,
+                      onChanged: (_) =>
+                          widget.onUpdate((p) => p.setAutoMixBars(bars)),
+                      child: Text('$bars bars'),
+                    ),
                   ),
-                ),
-              ],
-            ),
-            Slider(
-              value: seconds.clamp(12.0, 18.0),
-              min: 12,
-              max: 18,
-              divisions: 6,
-              onChanged: (v) => setState(() => _dragSeconds = v),
-              onChangeEnd: (v) async {
-                setState(() => _dragSeconds = null);
-                await widget.onUpdate(
-                    (p) => p.setAutoMixSeconds(v.round().clamp(12, 18)));
-              },
-            ),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text('12s',
-                    style: WaveType.meta
-                        .copyWith(color: waveTextSecondary(context))),
-                Text('18s',
-                    style: WaveType.meta
-                        .copyWith(color: waveTextSecondary(context))),
+                ],
               ],
             ),
             const SizedBox(height: 8),
@@ -3830,9 +3808,9 @@ class _TimedMixSettingsState extends ConsumerState<_TimedMixSettings> {
                     .read(playbackServiceProvider.notifier)
                     .applyAudioPrefs();
               },
-              title: 'Filter sweep',
+              title: 'Bass swap & filters',
               subtitle:
-                  'Low-pass on the way out and high-pass on the way in. Turns itself off (volume blend only) if the audio engine lacks the filters.',
+                  'Hands the bass over on the beat and crosses the highs, like a DJ mixer.',
             ),
           ],
         ],

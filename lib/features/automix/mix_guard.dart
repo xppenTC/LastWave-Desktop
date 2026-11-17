@@ -33,7 +33,9 @@ class MixGuardInput {
     required this.primary,
     this.standby,
     this.mixAge = Duration.zero,
-    this.maxMixAge = const Duration(seconds: 40),
+    // Well above the longest blend (24 s plus pre-roll): a running blend
+    // must never be cut off as "stuck".
+    this.maxMixAge = const Duration(seconds: 60),
     this.resolving = false,
   });
 
@@ -107,7 +109,7 @@ class MixFaultBudget {
 
   int get faults => _faults;
 
-  /// Beat-matching (tempo change, phase lock) still allowed.
+  /// Tempo matching (and its phase lock) still allowed.
   bool get beatMixAllowed => _faults < beatLimit;
 
   /// Any overlap still allowed (otherwise tracks change gaplessly).
@@ -117,7 +119,7 @@ class MixFaultBudget {
   String? record() {
     _faults++;
     if (_faults == beatLimit) {
-      return 'beat-matching off for this session after $_faults faults';
+      return 'tempo matching off for this session after $_faults faults';
     }
     if (_faults == overlapLimit) {
       return 'overlap off for this session after $_faults faults';

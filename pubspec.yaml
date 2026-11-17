@@ -92,6 +92,7 @@ dependencies:
   ffi: ^2.1.0
   html: ^0.15.7
   pointycastle: ^4.0.0
+  flutter_webrtc: ^1.6.3
 
 dev_dependencies:
   flutter_test:
