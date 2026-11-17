@@ -45,6 +45,21 @@ const _metaFields = [
   'discoverSignature',
 ];
 
+/// A desktop's own "Local songs" that older desktops sent through the file:
+/// none of its tracks is a file on the phone. Only the phone's own is kept.
+/// Same rule as the phone's BackupMerge.kt.
+bool _isDesktopLocalSongs(Map<String, dynamic> p) {
+  if (p['mode'] != 'local') return false;
+  final tracks = tracksOf(p);
+  return tracks.isNotEmpty &&
+      !tracks.any((t) {
+        final url = '${t['url'] ?? ''}';
+        return url.startsWith('/') ||
+            url.startsWith('content://') ||
+            url.startsWith('file://');
+      });
+}
+
 MergedLibrary mergeLibraries({
   required List<Map<String, dynamic>>? basePlaylists,
   required List<Map<String, dynamic>>? baseExclusions,
@@ -87,7 +102,7 @@ MergedLibrary mergeLibraries({
   }
 
   return MergedLibrary(
-    playlists,
+    playlists.where((p) => !_isDesktopLocalSongs(p)).toList(),
     _mergeByKey(
       baseExclusions,
       localExclusions,

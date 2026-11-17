@@ -297,4 +297,19 @@ void main() {
       );
     }
   });
+
+  test("a desktop's Local songs is dropped, the phone's stays", () {
+    final phone = pl(1, [t('mine', '/storage/emulated/0/Music/a.flac')],
+        title: 'Local songs', mode: 'local');
+    final desktop = pl(2, [t('pc')], title: 'Local songs', mode: 'local');
+    final m = mergeLibraries(
+      basePlaylists: null,
+      baseExclusions: null,
+      localPlaylists: const [],
+      localExclusions: const [],
+      remotePlaylists: [phone, desktop],
+      remoteExclusions: const [],
+    );
+    expect(m.playlists.map((p) => p['id']), [1]);
+  });
 }
